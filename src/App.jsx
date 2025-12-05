@@ -31,13 +31,19 @@ import {
   MessageSquare,
   Settings,
   CheckSquare,
-  Square
+  Square,
+  Mail,
+  Lock
 } from 'lucide-react';
 import { initializeApp } from "firebase/app";
 import { 
   getAuth, 
-  signInWithCustomToken, 
-  signInAnonymously,
+  signInWithPopup, 
+  GoogleAuthProvider,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  updateProfile,
+  signOut,
   onAuthStateChanged
 } from "firebase/auth";
 import { getFirestore, collection, addDoc, deleteDoc, onSnapshot, doc, setDoc, updateDoc } from "firebase/firestore";
@@ -101,7 +107,8 @@ const Button = ({ children, onClick, variant = "primary", className = "", disabl
     ghost: "text-slate-500 hover:text-slate-700 hover:bg-slate-50",
     outline: "border border-slate-200 text-slate-600 hover:bg-slate-50",
     magic: "bg-gradient-to-r from-purple-600 to-blue-600 text-white hover:from-purple-700 hover:to-blue-700 shadow-md",
-    success: "bg-green-600 text-white hover:bg-green-700 disabled:bg-green-300"
+    success: "bg-green-600 text-white hover:bg-green-700 disabled:bg-green-300",
+    google: "bg-white text-slate-700 border border-slate-200 hover:bg-slate-50"
   };
   return (
     <button 
@@ -118,13 +125,15 @@ const Button = ({ children, onClick, variant = "primary", className = "", disabl
 export default function SmartBudgetApp() {
   // --- State ---
   const [user, setUser] = useState(null); 
-  const [budgetId, setBudgetId] = useState(''); 
   const [activeTab, setActiveTab] = useState('dashboard');
   const [loading, setLoading] = useState(true);
   
-  // Auth/Login UI State
-  const [inputBudgetId, setInputBudgetId] = useState('');
-  const [showLogin, setShowLogin] = useState(true);
+  // Auth UI State
+  const [authMode, setAuthMode] = useState('login'); // 'login' or 'signup'
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [fullName, setFullName] = useState('');
+  const [authError, setAuthError] = useState('');
 
   // Profile Data
   const [displayName, setDisplayName] = useState('');
@@ -143,9 +152,6 @@ export default function SmartBudgetApp() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiParseLoading, setAiParseLoading] = useState(false);
   
-  // Debug State
-  const [debugStats, setDebugStats] = useState({ loaded: 0, matched: 0 });
-
   // Inputs State
   const [parseText, setParseText] = useState('');
   const [parsedResult, setParsedResult] = useState(null);
@@ -177,58 +183,36 @@ export default function SmartBudgetApp() {
   const [selectedLiability, setSelectedLiability] = useState(null);
   const [newCharge, setNewCharge] = useState({ amount: '', date: new Date().toISOString().split('T')[0], description: '' });
 
-  // --- 1. Authentication & Initialization ---
+  // --- 1. Authentication Listener ---
   
   useEffect(() => {
-    const initApp = async () => {
-      const storedId = localStorage.getItem('smart_budget_id');
-      if (storedId) {
-        setBudgetId(storedId);
-        setShowLogin(false);
-      }
-      // Authenticate to Firebase
-      // Check for environment variable token first (for preview), else anonymous
-      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-        try {
-          await signInWithCustomToken(auth, __initial_auth_token);
-        } catch (e) {
-          await signInAnonymously(auth);
-        }
-      } else {
-        await signInAnonymously(auth);
-      }
-    };
-    initApp();
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
+      if (u) {
+        setDisplayName(u.displayName || 'Budget Owner');
+      }
       setLoading(false);
     });
     return () => unsubscribe();
   }, []);
 
-  // --- 2. Data Syncing ---
+  // --- 2. Data Syncing (PRIVATE PATH) ---
   
   useEffect(() => {
-    if (!user || !budgetId) return;
+    if (!user) return;
 
+    // Use PRIVATE user path: artifacts/{appId}/users/{uid}/{collection}
     const createListener = (collectionName, setter) => {
-      const q = collection(db, 'artifacts', appId, 'public', 'data', collectionName);
+      const q = collection(db, 'artifacts', appId, 'users', user.uid, collectionName);
       return onSnapshot(q, (snapshot) => {
-        const allData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         
-        // Filter strictly by Budget ID
-        const myData = allData.filter(item => item.budgetId && item.budgetId === budgetId);
-        
-        // Debugging Stats (Count strictly what we found vs what we filtered)
-        if (collectionName === 'incomes') { 
-             setDebugStats(prev => ({ ...prev, loaded: allData.length, matched: myData.length }));
-        }
-
-        myData.sort((a, b) => {
+        // Sorting logic
+        data.sort((a, b) => {
            if (a.date && b.date) return new Date(b.date) - new Date(a.date);
            return 0;
         });
-        setter(myData);
+        setter(data);
       }, (error) => console.error(`Error syncing ${collectionName}:`, error));
     };
 
@@ -237,25 +221,13 @@ export default function SmartBudgetApp() {
     const unsubLiabilities = createListener('liabilities', setLiabilities);
     const unsubHistory = createListener('historicalPaychecks', setHistoricalPaychecks);
 
-    // Profile Fetch
-    const fetchProfile = async () => {
-       try {
-         const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'profiles', budgetId);
-         onSnapshot(docRef, (doc) => {
-            if (doc.exists()) {
-              setDisplayName(doc.data().displayName);
-            }
-         });
-         // Fetch Budget Config
-         const configRef = doc(db, 'artifacts', appId, 'public', 'data', `config_${budgetId}`);
-         onSnapshot(configRef, (doc) => {
-            if (doc.exists()) {
-              setBudgetConfig(doc.data());
-            }
-         });
-       } catch (e) { console.error("Profile fetch error", e); }
-    };
-    fetchProfile();
+    // Fetch Budget Config (Stored as a doc in user's collection)
+    const configRef = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'budget_config');
+    onSnapshot(configRef, (doc) => {
+      if (doc.exists()) {
+        setBudgetConfig(doc.data());
+      }
+    });
 
     return () => {
       unsubIncomes();
@@ -263,68 +235,71 @@ export default function SmartBudgetApp() {
       unsubLiabilities();
       unsubHistory();
     };
-  }, [user, budgetId]);
+  }, [user]);
 
-  // --- Handlers ---
+  // --- Auth Handlers ---
 
-  const handleLogin = (e) => {
-    e.preventDefault();
-    if (!inputBudgetId.trim()) return;
-    const cleanId = inputBudgetId.trim(); 
-    localStorage.setItem('smart_budget_id', cleanId);
-    setBudgetId(cleanId);
-    setShowLogin(false);
+  const handleGoogleLogin = async () => {
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+    } catch (error) {
+      setAuthError(error.message);
+    }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem('smart_budget_id');
-    setBudgetId('');
+  const handleEmailAuth = async (e) => {
+    e.preventDefault();
+    setAuthError('');
+    try {
+      if (authMode === 'login') {
+        await signInWithEmailAndPassword(auth, email, password);
+      } else {
+        const res = await createUserWithEmailAndPassword(auth, email, password);
+        await updateProfile(res.user, { displayName: fullName });
+      }
+    } catch (error) {
+      setAuthError(error.message);
+    }
+  };
+
+  const handleLogout = async () => {
+    await signOut(auth);
     setIncomes([]);
     setBills([]);
     setLiabilities([]);
-    setDisplayName('');
-    setInputBudgetId('');
-    setShowLogin(true);
   };
 
   const handleUpdateProfileName = async (e) => {
     e.preventDefault();
     if (!tempName.trim()) return;
-    if (!user) { alert("Error: User not authenticated. Check Firebase Auth settings."); return; }
-    
     try {
-      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'profiles', budgetId), {
-        displayName: tempName,
-        budgetId: budgetId
-      });
+      await updateProfile(user, { displayName: tempName });
       setDisplayName(tempName);
       setIsEditingProfile(false);
-    } catch (e) { 
-      console.error("Error saving profile", e); 
-      alert("Failed to save profile. Check Firestore Rules or Network.");
-    }
+    } catch (e) { console.error("Error saving profile", e); }
   };
 
   const handleSaveBudgetConfig = async () => {
-    if (!user || !budgetId) return;
+    if (!user) return;
     try {
-      await setDoc(doc(db, 'artifacts', appId, 'public', 'data', `config_${budgetId}`), {
-        ...budgetConfig,
-        budgetId: budgetId
+      await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'budget_config'), {
+        ...budgetConfig
       });
       alert("Budget cycle settings saved!");
     } catch (e) { alert("Error saving config"); }
   };
 
+  // --- Data Ops (Private Path) ---
+
   const addItem = async (collectionName, item) => {
     if (!user) throw new Error("User not authenticated");
-    if (!budgetId) throw new Error("Budget ID missing");
     
     try {
-      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', collectionName), {
+      await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, collectionName), {
         ...item,
-        paid: false, // Default to unpaid
-        budgetId: budgetId 
+        paid: false, 
+        createdAt: new Date().toISOString()
       });
     } catch (e) { 
       console.error("Error adding item:", e);
@@ -333,8 +308,9 @@ export default function SmartBudgetApp() {
   };
 
   const updateItem = async (collectionName, id, updates) => {
+    if (!user) return;
     try {
-      const docRef = doc(db, 'artifacts', appId, 'public', 'data', collectionName, id);
+      const docRef = doc(db, 'artifacts', appId, 'users', user.uid, collectionName, id);
       await updateDoc(docRef, updates);
     } catch (e) { console.error("Error updating:", e); }
   };
@@ -342,7 +318,7 @@ export default function SmartBudgetApp() {
   const deleteItem = async (collectionName, id) => {
     if (!user) return;
     try {
-      await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', collectionName, id));
+      await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, collectionName, id));
     } catch (e) { console.error("Error deleting:", e); }
   };
 
@@ -370,19 +346,17 @@ export default function SmartBudgetApp() {
       'monthly': 30
     }[budgetConfig.frequency] || 14;
 
-    // Find the current cycle start relative to the base start date
     const diffTime = Math.abs(today - start);
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
     const cyclesPassed = Math.floor(diffDays / freqDays);
     
-    // If future date selected, use it, otherwise calc latest cycle
     let cycleStart = new Date(start);
     if (start < today) {
         cycleStart.setDate(start.getDate() + (cyclesPassed * freqDays));
     }
     
     const cycleEnd = new Date(cycleStart);
-    cycleEnd.setDate(cycleStart.getDate() + freqDays - 1); // Inclusive
+    cycleEnd.setDate(cycleStart.getDate() + freqDays - 1); 
 
     return { start: cycleStart, end: cycleEnd };
   }, [budgetConfig]);
@@ -399,8 +373,6 @@ export default function SmartBudgetApp() {
     const today = new Date();
     const d = new Date();
     d.setDate(parseInt(day));
-    // If the day has passed in current month, it might still be valid for "Due Soon" if we are looking ahead
-    // But typically if today is 20th and due day is 5th, the *next* due date is next month
     if (d < today) d.setMonth(d.getMonth() + 1);
     return d;
   };
@@ -415,7 +387,6 @@ export default function SmartBudgetApp() {
     let current = [];
     let future = [];
 
-    // Helper to categorize
     const categorize = (item, dueDate, isPaid) => {
       const d = new Date(dueDate);
       d.setHours(0,0,0,0);
@@ -431,12 +402,10 @@ export default function SmartBudgetApp() {
       }
     };
 
-    // Process Bills
     bills.forEach(b => {
       if (b.date) categorize({ ...b, type: 'bill' }, b.date, b.paid);
     });
 
-    // Process Liabilities
     liabilities.forEach(l => {
       let d = null;
       if (l.dueDay) {
@@ -446,19 +415,15 @@ export default function SmartBudgetApp() {
       }
       
       if (d) {
-        // Check if paid for this cycle
-        // If lastPaymentDate exists and falls within current cycle start/end
         let isPaidForCycle = false;
         if (l.lastPaymentDate) {
            const payDate = new Date(l.lastPaymentDate);
            if (payDate >= start && payDate <= end) isPaidForCycle = true;
         }
-        
         categorize({ ...l, type: 'liability', amount: l.minPayment, paid: isPaidForCycle }, d, isPaidForCycle);
       }
     });
 
-    // Sort by date
     const sorter = (a, b) => new Date(a.dueDateDisplay) - new Date(b.dueDateDisplay);
     return {
       overdue: overdue.sort(sorter),
@@ -475,9 +440,7 @@ export default function SmartBudgetApp() {
       Current Pay Period: ${currentBudgetCycle.start.toDateString()} to ${currentBudgetCycle.end.toDateString()}
       Total Income: $${totalIncome}
       Remaining Cash: $${remaining}
-      
-      Overdue Bills: ${categorizedObligations.overdue.length} ($${categorizedObligations.overdue.reduce((a,b) => a + Number(b.amount), 0)})
-      Bills Due This Period: ${categorizedObligations.current.length} ($${categorizedObligations.current.reduce((a,b) => a + Number(b.amount), 0)})
+      Debts: ${liabilities.map(l => `- ${l.name}: $${l.currentBal}`).join(', ')}
     `;
 
     const prompt = `You are a helpful financial advisor. Analyze this budget snapshot:\n${snapshot}\n\nProvide 3 short, actionable bullet points about prioritizing the overdue/current bills and managing cash flow for this specific pay period.`;
@@ -520,7 +483,7 @@ export default function SmartBudgetApp() {
     if (!selectedLiability || !newCharge.amount) return;
     const newBal = parseFloat(selectedLiability.currentBal) + parseFloat(newCharge.amount);
     try {
-      const liabilityRef = doc(db, 'artifacts', appId, 'public', 'data', 'liabilities', selectedLiability.id);
+      const liabilityRef = doc(db, 'artifacts', appId, 'users', user.uid, 'liabilities', selectedLiability.id);
       await updateDoc(liabilityRef, { currentBal: newBal });
       setChargeModalOpen(false);
     } catch (e) { console.error("Error updating balance:", e); }
@@ -532,7 +495,7 @@ export default function SmartBudgetApp() {
     
     if (window.confirm(`Close statement for ${liability.name}?\n\nInterest Added: $${interest.toFixed(2)}\nNew Balance: $${newBal.toFixed(2)}`)) {
       try {
-        const liabilityRef = doc(db, 'artifacts', appId, 'public', 'data', 'liabilities', liability.id);
+        const liabilityRef = doc(db, 'artifacts', appId, 'users', user.uid, 'liabilities', liability.id);
         await updateDoc(liabilityRef, { 
           currentBal: newBal,
           statementBal: newBal 
@@ -546,14 +509,7 @@ export default function SmartBudgetApp() {
   };
 
   const toggleLiabilityPaid = async (liability) => {
-    // If currently paid (meaning lastPaymentDate is in current cycle), we clear it (undo)
-    // If not paid, we set lastPaymentDate to today
     const now = new Date().toISOString();
-    // Check if already paid in this cycle logic handled in render
-    // Just simple toggle: if passed in 'paid' is true, clear date. Else set date.
-    
-    // We need to know if it was considered paid. We can re-check logic or just blindly set/clear.
-    // Let's check logic:
     const { start, end } = currentBudgetCycle;
     let isPaid = false;
     if (liability.lastPaymentDate) {
@@ -677,34 +633,56 @@ export default function SmartBudgetApp() {
 
   // --- Render Functions ---
 
-  const renderLogin = () => (
+  const renderAuth = () => (
     <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
       <Card className="w-full max-w-md p-8 shadow-xl animate-in fade-in zoom-in-95 duration-300">
         <div className="text-center mb-8">
           <div className="bg-blue-100 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 text-blue-600 rotate-3">
             <Key size={32} />
           </div>
-          <h1 className="text-2xl font-bold text-slate-800">SmartBudget Login</h1>
-          <p className="text-slate-500 mt-2">Enter your Personal Budget ID</p>
+          <h1 className="text-2xl font-bold text-slate-800">SmartBudget</h1>
+          <p className="text-slate-500 mt-2">Secure Cloud Login</p>
         </div>
 
-        <form onSubmit={handleLogin} className="space-y-6">
-          <div>
-            <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Budget ID (Passphrase)</label>
-            <div className="relative">
-              <Key className="absolute left-3 top-3 text-slate-400" size={18} />
-              <input 
-                type="text" 
-                required
-                value={inputBudgetId}
-                onChange={(e) => setInputBudgetId(e.target.value)}
-                className="w-full pl-10 p-3 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all font-mono text-center text-lg tracking-wide"
-                placeholder="e.g. alex-2025"
-              />
-            </div>
+        <div className="space-y-4">
+          <Button onClick={handleGoogleLogin} variant="google" className="w-full justify-center py-3 flex gap-2">
+            <svg className="w-5 h-5" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
+            Sign in with Google
+          </Button>
+
+          <div className="relative flex items-center py-2">
+            <div className="flex-grow border-t border-slate-200"></div>
+            <span className="flex-shrink-0 mx-4 text-slate-400 text-xs">OR WITH EMAIL</span>
+            <div className="flex-grow border-t border-slate-200"></div>
           </div>
-          <Button type="submit" className="w-full py-3">Access Budget</Button>
-        </form>
+
+          <form onSubmit={handleEmailAuth} className="space-y-3">
+            {authMode === 'signup' && (
+              <div className="relative">
+                <User className="absolute left-3 top-2.5 text-slate-400" size={18} />
+                <input type="text" placeholder="Full Name" value={fullName} onChange={e => setFullName(e.target.value)} className="w-full pl-10 p-2 border rounded" required />
+              </div>
+            )}
+            <div className="relative">
+              <Mail className="absolute left-3 top-2.5 text-slate-400" size={18} />
+              <input type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} className="w-full pl-10 p-2 border rounded" required />
+            </div>
+            <div className="relative">
+              <Lock className="absolute left-3 top-2.5 text-slate-400" size={18} />
+              <input type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} className="w-full pl-10 p-2 border rounded" required />
+            </div>
+            {authError && <p className="text-red-500 text-xs">{authError}</p>}
+            <Button type="submit" className="w-full justify-center">
+              {authMode === 'login' ? 'Sign In' : 'Create Account'}
+            </Button>
+          </form>
+          
+          <div className="text-center text-xs text-slate-500 mt-4">
+            <button onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')} className="text-blue-600 hover:underline">
+              {authMode === 'login' ? 'Need an account? Sign up' : 'Already have an account? Sign in'}
+            </button>
+          </div>
+        </div>
       </Card>
     </div>
   );
@@ -735,7 +713,6 @@ export default function SmartBudgetApp() {
         )}
       </Card>
 
-      {/* NEW: Obligations Widget with Tabs */}
       <Card className="p-6 bg-slate-800 text-white">
         <div className="flex items-center justify-between mb-4">
            <div className="flex items-center gap-2">
@@ -1205,7 +1182,7 @@ export default function SmartBudgetApp() {
               <User size={40} />
            </div>
            <h2 className="text-2xl font-bold text-slate-800">User Profile</h2>
-           <p className="text-slate-500 mt-2">Managing Budget: <span className="font-mono bg-slate-100 px-2 py-1 rounded text-slate-800">{budgetId}</span></p>
+           <p className="text-slate-500 mt-2">Welcome, {user?.displayName || 'User'}</p>
         </div>
         <Card className="p-6 space-y-4">
            <div>
@@ -1226,20 +1203,18 @@ export default function SmartBudgetApp() {
               </div>
            </div>
            <div>
-              <label className="text-xs font-semibold text-slate-500 uppercase">Data Debugger</label>
-              <div className="p-3 bg-slate-50 rounded border border-slate-200 text-xs text-slate-600 space-y-1">
-                 <div className="flex items-center gap-2"><Database size={12} /> Cloud Items Found: <span className="font-bold">{debugStats.loaded}</span></div>
-                 <div className="flex items-center gap-2 text-green-600"><CheckCircle size={12} /> Matching Your ID: <span className="font-bold">{debugStats.matched}</span></div>
-                 <p className="pt-2 text-slate-400 italic">If 'Matched' is 0, check your Budget ID for typos/spaces.</p>
+              <label className="text-xs font-semibold text-slate-500 uppercase">Account Email</label>
+              <div className="p-3 bg-slate-50 rounded border border-slate-200 text-sm font-medium text-slate-800">
+                 {user?.email || 'N/A (Google Sign-In)'}
               </div>
            </div>
            <div>
-              <label className="text-xs font-semibold text-slate-500 uppercase">Device Sync</label>
-              <div className="flex items-center gap-2 mt-1 text-green-600"><Smartphone size={16} /><span className="text-sm font-medium">Portable</span></div>
-              <p className="text-xs text-slate-400 mt-1">Data is stored in public cloud securely tagged with your ID.</p>
+              <label className="text-xs font-semibold text-slate-500 uppercase">Data Security</label>
+              <div className="flex items-center gap-2 mt-1 text-green-600"><ShieldAlert size={16} /><span className="text-sm font-medium">Private Storage</span></div>
+              <p className="text-xs text-slate-400 mt-1">Your data is stored in a private collection linked only to your User ID.</p>
            </div>
            <div className="pt-4 border-t border-slate-100">
-             <Button onClick={handleLogout} variant="danger" className="w-full"><LogOut size={16} /> Logout / Switch Budget</Button>
+             <Button onClick={handleLogout} variant="danger" className="w-full"><LogOut size={16} /> Logout</Button>
            </div>
         </Card>
      </div>
@@ -1256,7 +1231,7 @@ export default function SmartBudgetApp() {
      );
   }
 
-  if (showLogin) return renderLogin();
+  if (!user) return renderAuth();
 
   return (
     <div className="min-h-screen bg-slate-100 font-sans text-slate-900 pb-20">
