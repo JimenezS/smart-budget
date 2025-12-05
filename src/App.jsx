@@ -54,7 +54,7 @@ const firebaseConfig = typeof __firebase_config !== 'undefined'
   messagingSenderId: "38995285066",
   appId: "1:38995285066:web:540cfa83f44bbca6d202b3",
   measurementId: "G-2SHPJKS224"
-}};
+};
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
