@@ -61,8 +61,9 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 // --- API Helper ---
 const callGemini = async (prompt) => {
   // NOTE FOR DEPLOYMENT: 
-  // In your local VS Code project, replace the empty string below with: import.meta.env.VITE_GEMINI_KEY
-  const apiKey = import.meta.env.VITE_GEMINI_KEY;; 
+  // In your local VS Code project, CHANGE this line to: 
+  // const apiKey = import.meta.env.VITE_GEMINI_KEY;
+  const apiKey = import.meta.env.VITE_GEMINI_KEY; 
   
   try {
     const response = await fetch(
@@ -277,6 +278,8 @@ export default function SmartBudgetApp() {
   const handleUpdateProfileName = async (e) => {
     e.preventDefault();
     if (!tempName.trim()) return;
+    if (!user) { alert("Error: User not authenticated. Check Firebase Auth settings."); return; }
+    
     try {
       await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'profiles', budgetId), {
         displayName: tempName,
@@ -284,17 +287,25 @@ export default function SmartBudgetApp() {
       });
       setDisplayName(tempName);
       setIsEditingProfile(false);
-    } catch (e) { console.error("Error saving profile", e); }
+    } catch (e) { 
+      console.error("Error saving profile", e); 
+      alert("Failed to save profile. Check Firestore Rules or Network.");
+    }
   };
 
   const addItem = async (collectionName, item) => {
-    if (!user || !budgetId) return;
+    if (!user) throw new Error("User not authenticated");
+    if (!budgetId) throw new Error("Budget ID missing");
+    
     try {
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', collectionName), {
         ...item,
-        budgetId: budgetId // Critical: Tag data with ID
+        budgetId: budgetId 
       });
-    } catch (e) { console.error("Error adding:", e); }
+    } catch (e) { 
+      console.error("Error adding item:", e);
+      throw e; 
+    }
   };
 
   const deleteItem = async (collectionName, id) => {
@@ -452,8 +463,10 @@ export default function SmartBudgetApp() {
     const gross = parseFloat(e.target.gross.value);
     const net = parseFloat(e.target.net.value);
     if (gross && net) {
-      addItem('historicalPaychecks', { date: e.target.date.value, gross, net });
-      e.target.reset();
+      try {
+        addItem('historicalPaychecks', { date: e.target.date.value, gross, net });
+        e.target.reset();
+      } catch (err) { alert("Failed to add record. Check console/auth."); }
     }
   };
 
@@ -473,31 +486,39 @@ export default function SmartBudgetApp() {
     }));
   };
 
-  const handleAddIncome = () => {
+  const handleAddIncome = async () => {
     if (!newIncome.source || !newIncome.net) return;
-    addItem('incomes', {
-      source: newIncome.source,
-      amount: parseFloat(newIncome.net),
-      date: newIncome.date,
-      payPeriod: newIncome.payPeriod,
-      type: 'variable'
-    });
-    setNewIncome({ source: '', gross: '', net: '', date: new Date().toISOString().split('T')[0], payPeriod: '' });
+    try {
+      await addItem('incomes', {
+        source: newIncome.source,
+        amount: parseFloat(newIncome.net),
+        date: newIncome.date,
+        payPeriod: newIncome.payPeriod,
+        type: 'variable'
+      });
+      setNewIncome({ source: '', gross: '', net: '', date: new Date().toISOString().split('T')[0], payPeriod: '' });
+    } catch (e) {
+      alert("Failed to add income: " + e.message);
+    }
   };
 
-  const handleAddLiability = () => {
+  const handleAddLiability = async () => {
     if (!newLiability.name || !newLiability.currentBal) return;
-    addItem('liabilities', {
-      ...newLiability,
-      statementBal: parseFloat(newLiability.statementBal) || 0,
-      currentBal: parseFloat(newLiability.currentBal) || 0,
-      minPayment: parseFloat(newLiability.minPayment) || 0,
-      apr: parseFloat(newLiability.apr) || 0
-    });
-    setNewLiability({
-      name: '', type: 'revolving', statementBal: '', currentBal: '', 
-      minPayment: '', apr: '', closingDay: '', dueDay: ''
-    });
+    try {
+      await addItem('liabilities', {
+        ...newLiability,
+        statementBal: parseFloat(newLiability.statementBal) || 0,
+        currentBal: parseFloat(newLiability.currentBal) || 0,
+        minPayment: parseFloat(newLiability.minPayment) || 0,
+        apr: parseFloat(newLiability.apr) || 0
+      });
+      setNewLiability({
+        name: '', type: 'revolving', statementBal: '', currentBal: '', 
+        minPayment: '', apr: '', closingDay: '', dueDay: ''
+      });
+    } catch (e) {
+      alert("Failed to add liability: " + e.message);
+    }
   };
 
   const parseBillText = () => {
@@ -523,12 +544,16 @@ export default function SmartBudgetApp() {
     });
   };
 
-  const confirmParsedBill = () => {
+  const confirmParsedBill = async () => {
     if (!parsedResult) return;
-    addItem('bills', { ...parsedResult, amount: parseFloat(parsedResult.amount) });
-    setParsedResult(null);
-    setParseText('');
-    setActiveTab('bills');
+    try {
+      await addItem('bills', { ...parsedResult, amount: parseFloat(parsedResult.amount) });
+      setParsedResult(null);
+      setParseText('');
+      setActiveTab('bills');
+    } catch (e) {
+      alert("Failed to add bill: " + e.message);
+    }
   };
 
   // --- Render Functions ---
@@ -689,167 +714,6 @@ export default function SmartBudgetApp() {
             {bills.length === 0 && <p className="text-slate-400 text-sm italic">No bills recorded.</p>}
           </div>
         </Card>
-      </div>
-    </div>
-  );
-
-  const renderIncome = () => (
-    <div className="space-y-6 animate-in fade-in">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Calibration Section */}
-        <div className="lg:col-span-1 space-y-6">
-          <Card className="p-6 bg-slate-50 border-slate-200">
-            <div className="flex items-center gap-2 mb-4">
-              <History className="text-blue-600" size={20} />
-              <h3 className="font-bold text-slate-800">1. Calibration</h3>
-            </div>
-            <p className="text-xs text-slate-500 mb-4">Input past paychecks to determine your tax/deduction rate.</p>
-            <form onSubmit={handleAddHistorical} className="space-y-3 mb-6">
-              <input name="date" type="date" required className="w-full p-2 text-sm border rounded" />
-              <div className="grid grid-cols-2 gap-2">
-                <input name="gross" type="number" step="0.01" placeholder="Gross Pay" required className="w-full p-2 text-sm border rounded" />
-                <input name="net" type="number" step="0.01" placeholder="Net Pay" required className="w-full p-2 text-sm border rounded" />
-              </div>
-              <Button className="w-full text-sm" type="submit" variant="secondary">Add Past Record</Button>
-            </form>
-            <div className="pt-4 border-t border-slate-200">
-              <div className="flex justify-between items-center mb-2">
-                <span className="text-sm font-medium text-slate-600">Avg. Deduction:</span>
-                <span className="text-lg font-bold text-blue-600">{deductionStats.label}</span>
-              </div>
-              <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
-                {historicalPaychecks.map(item => (
-                  <div key={item.id} className="flex justify-between text-xs text-slate-500 bg-white p-2 rounded border border-slate-100">
-                    <span>{item.date}</span>
-                    <span>Gr: ${item.gross}</span>
-                    <button onClick={() => deleteItem('historicalPaychecks', item.id)} className="text-red-400 hover:text-red-600">
-                      <Trash2 size={12} />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </Card>
-        </div>
-
-        {/* Add Income Section */}
-        <div className="lg:col-span-2 space-y-6">
-          <Card className="p-6 border-blue-100 shadow-md">
-            <div className="flex items-center gap-2 mb-6">
-              <DollarSign className="text-green-600" size={24} />
-              <h3 className="text-xl font-bold text-slate-800">2. Add Income</h3>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Source Name</label>
-                  <input 
-                    type="text" 
-                    placeholder="e.g. Tips, Uber, Shift A" 
-                    value={newIncome.source} 
-                    onChange={e => setNewIncome({...newIncome, source: e.target.value})} 
-                    className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500" 
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                   <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Date Received</label>
-                      <input 
-                        type="date" 
-                        value={newIncome.date} 
-                        onChange={e => setNewIncome({...newIncome, date: e.target.value})} 
-                        className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500" 
-                      />
-                   </div>
-                   <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Pay Period</label>
-                      <input 
-                        type="text" 
-                        placeholder="e.g. Oct 1-15" 
-                        value={newIncome.payPeriod} 
-                        onChange={e => setNewIncome({...newIncome, payPeriod: e.target.value})} 
-                        className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500" 
-                      />
-                   </div>
-                </div>
-              </div>
-              <div className="space-y-4 bg-blue-50 p-4 rounded-xl border border-blue-100">
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-sm font-bold text-blue-800">Amounts</label>
-                  <div className="flex items-center gap-2">
-                    <input 
-                      type="checkbox" 
-                      id="autoCalc" 
-                      checked={isAutoCalc} 
-                      onChange={e => setIsAutoCalc(e.target.checked)} 
-                      className="rounded text-blue-600 focus:ring-blue-500" 
-                    />
-                    <label htmlFor="autoCalc" className="text-xs text-blue-600 cursor-pointer select-none">Auto-calculate Net</label>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1">Gross Amount</label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-3 text-slate-400">$</span>
-                    <input 
-                      type="number" 
-                      placeholder="0.00" 
-                      value={newIncome.gross} 
-                      onChange={handleGrossChange} 
-                      className="w-full pl-8 p-2 border border-slate-200 rounded-lg" 
-                    />
-                  </div>
-                </div>
-                <div className="relative">
-                  {isAutoCalc && (
-                    <div className="absolute right-0 -top-6 text-xs bg-blue-200 text-blue-800 px-2 py-0.5 rounded-full flex items-center gap-1">
-                      <Brain size={10} />
-                      -{deductionStats.label}
-                    </div>
-                  )}
-                  <label className="block text-xs text-slate-500 mb-1">Net Amount</label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-3 text-green-600 font-bold">$</span>
-                    <input 
-                      type="number" 
-                      placeholder="0.00" 
-                      value={newIncome.net} 
-                      onChange={e => setNewIncome({...newIncome, net: e.target.value})} 
-                      className="w-full pl-8 p-2 border-2 border-green-500/30 rounded-lg font-bold text-slate-800" 
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div className="mt-6 flex justify-end">
-              <Button onClick={handleAddIncome} className="w-full md:w-auto">
-                <Plus size={18} /> Add to Budget
-              </Button>
-            </div>
-          </Card>
-
-          {/* Income Log */}
-          <div className="space-y-2">
-            <h4 className="font-semibold text-slate-700">Income Log</h4>
-            {incomes.map(inc => (
-              <div key={inc.id} className="flex justify-between items-center bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
-                <div>
-                  <p className="font-medium text-slate-800">{inc.source}</p>
-                  <div className="flex gap-2 text-xs text-slate-500">
-                    <span>{inc.date}</span>
-                    {inc.payPeriod && <span className="bg-slate-100 px-1 rounded">Pd: {inc.payPeriod}</span>}
-                  </div>
-                </div>
-                <div className="flex items-center gap-4">
-                  <span className="font-bold text-green-600">+${inc.amount.toFixed(2)}</span>
-                  <button onClick={() => deleteItem('incomes', inc.id)} className="text-slate-400 hover:text-red-500">
-                    <Trash2 size={16} />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
       </div>
     </div>
   );
@@ -1086,6 +950,167 @@ export default function SmartBudgetApp() {
           </Card>
         </div>
       )}
+    </div>
+  );
+
+  const renderIncome = () => (
+    <div className="space-y-6 animate-in fade-in">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Calibration Section */}
+        <div className="lg:col-span-1 space-y-6">
+          <Card className="p-6 bg-slate-50 border-slate-200">
+            <div className="flex items-center gap-2 mb-4">
+              <History className="text-blue-600" size={20} />
+              <h3 className="font-bold text-slate-800">1. Calibration</h3>
+            </div>
+            <p className="text-xs text-slate-500 mb-4">Input past paychecks to determine your tax/deduction rate.</p>
+            <form onSubmit={handleAddHistorical} className="space-y-3 mb-6">
+              <input name="date" type="date" required className="w-full p-2 text-sm border rounded" />
+              <div className="grid grid-cols-2 gap-2">
+                <input name="gross" type="number" step="0.01" placeholder="Gross Pay" required className="w-full p-2 text-sm border rounded" />
+                <input name="net" type="number" step="0.01" placeholder="Net Pay" required className="w-full p-2 text-sm border rounded" />
+              </div>
+              <Button className="w-full text-sm" type="submit" variant="secondary">Add Past Record</Button>
+            </form>
+            <div className="pt-4 border-t border-slate-200">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-sm font-medium text-slate-600">Avg. Deduction:</span>
+                <span className="text-lg font-bold text-blue-600">{deductionStats.label}</span>
+              </div>
+              <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+                {historicalPaychecks.map(item => (
+                  <div key={item.id} className="flex justify-between text-xs text-slate-500 bg-white p-2 rounded border border-slate-100">
+                    <span>{item.date}</span>
+                    <span>Gr: ${item.gross}</span>
+                    <button onClick={() => deleteItem('historicalPaychecks', item.id)} className="text-red-400 hover:text-red-600">
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </Card>
+        </div>
+
+        {/* Add Income Section */}
+        <div className="lg:col-span-2 space-y-6">
+          <Card className="p-6 border-blue-100 shadow-md">
+            <div className="flex items-center gap-2 mb-6">
+              <DollarSign className="text-green-600" size={24} />
+              <h3 className="text-xl font-bold text-slate-800">2. Add Income</h3>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Source Name</label>
+                  <input 
+                    type="text" 
+                    placeholder="e.g. Tips, Uber, Shift A" 
+                    value={newIncome.source} 
+                    onChange={e => setNewIncome({...newIncome, source: e.target.value})} 
+                    className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500" 
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                   <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Date Received</label>
+                      <input 
+                        type="date" 
+                        value={newIncome.date} 
+                        onChange={e => setNewIncome({...newIncome, date: e.target.value})} 
+                        className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500" 
+                      />
+                   </div>
+                   <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Pay Period</label>
+                      <input 
+                        type="text" 
+                        placeholder="e.g. Oct 1-15" 
+                        value={newIncome.payPeriod} 
+                        onChange={e => setNewIncome({...newIncome, payPeriod: e.target.value})} 
+                        className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500" 
+                      />
+                   </div>
+                </div>
+              </div>
+              <div className="space-y-4 bg-blue-50 p-4 rounded-xl border border-blue-100">
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-sm font-bold text-blue-800">Amounts</label>
+                  <div className="flex items-center gap-2">
+                    <input 
+                      type="checkbox" 
+                      id="autoCalc" 
+                      checked={isAutoCalc} 
+                      onChange={e => setIsAutoCalc(e.target.checked)} 
+                      className="rounded text-blue-600 focus:ring-blue-500" 
+                    />
+                    <label htmlFor="autoCalc" className="text-xs text-blue-600 cursor-pointer select-none">Auto-calculate Net</label>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-500 mb-1">Gross Amount</label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-3 text-slate-400">$</span>
+                    <input 
+                      type="number" 
+                      placeholder="0.00" 
+                      value={newIncome.gross} 
+                      onChange={handleGrossChange} 
+                      className="w-full pl-8 p-2 border border-slate-200 rounded-lg" 
+                    />
+                  </div>
+                </div>
+                <div className="relative">
+                  {isAutoCalc && (
+                    <div className="absolute right-0 -top-6 text-xs bg-blue-200 text-blue-800 px-2 py-0.5 rounded-full flex items-center gap-1">
+                      <Brain size={10} />
+                      -{deductionStats.label}
+                    </div>
+                  )}
+                  <label className="block text-xs text-slate-500 mb-1">Net Amount</label>
+                  <div className="relative">
+                    <span className="absolute left-3 top-3 text-green-600 font-bold">$</span>
+                    <input 
+                      type="number" 
+                      placeholder="0.00" 
+                      value={newIncome.net} 
+                      onChange={e => setNewIncome({...newIncome, net: e.target.value})} 
+                      className="w-full pl-8 p-2 border-2 border-green-500/30 rounded-lg font-bold text-slate-800" 
+                    />
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end">
+              <Button onClick={handleAddIncome} className="w-full md:w-auto">
+                <Plus size={18} /> Add to Budget
+              </Button>
+            </div>
+          </Card>
+
+          {/* Income Log */}
+          <div className="space-y-2">
+            <h4 className="font-semibold text-slate-700">Income Log</h4>
+            {incomes.map(inc => (
+              <div key={inc.id} className="flex justify-between items-center bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
+                <div>
+                  <p className="font-medium text-slate-800">{inc.source}</p>
+                  <div className="flex gap-2 text-xs text-slate-500">
+                    <span>{inc.date}</span>
+                    {inc.payPeriod && <span className="bg-slate-100 px-1 rounded">Pd: {inc.payPeriod}</span>}
+                  </div>
+                </div>
+                <div className="flex items-center gap-4">
+                  <span className="font-bold text-green-600">+${inc.amount.toFixed(2)}</span>
+                  <button onClick={() => deleteItem('incomes', inc.id)} className="text-slate-400 hover:text-red-500">
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   );
 
