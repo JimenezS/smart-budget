@@ -58,7 +58,7 @@ import { getFirestore, collection, addDoc, deleteDoc, onSnapshot, doc, setDoc, u
 // --- Firebase Initialization ---
 const firebaseConfig = typeof __firebase_config !== 'undefined' 
   ? JSON.parse(__firebase_config) 
-  : {
+  :{
   apiKey: "AIzaSyAoODPsPJagi0w9tqn9JL-pTL4BHCyrr38",
   authDomain: "smartbudgeting-44933.firebaseapp.com",
   projectId: "smartbudgeting-44933",
@@ -67,7 +67,6 @@ const firebaseConfig = typeof __firebase_config !== 'undefined'
   appId: "1:38995285066:web:540cfa83f44bbca6d202b3",
   measurementId: "G-2SHPJKS224"
 }
-;
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -141,6 +140,7 @@ const Button = ({ children, onClick, variant = "primary", className = "", disabl
 };
 
 export default function SmartBudgetApp() {
+  // --- State ---
   const [user, setUser] = useState(null); 
   const [activeTab, setActiveTab] = useState('dashboard');
   const [loading, setLoading] = useState(true);
@@ -163,7 +163,11 @@ export default function SmartBudgetApp() {
   const [liabilities, setLiabilities] = useState([]);
   const [expenses, setExpenses] = useState([]); 
   const [historicalPaychecks, setHistoricalPaychecks] = useState([]);
-  const [budgetConfig, setBudgetConfig] = useState({ startDate: new Date().toISOString().split('T')[0], frequency: 'bi-weekly', payDate: '' });
+  const [budgetConfig, setBudgetConfig] = useState({ 
+    startDate: new Date().toISOString().split('T')[0], 
+    frequency: 'bi-weekly', 
+    payDate: '' 
+  });
   
   // AI State
   const [aiAdvice, setAiAdvice] = useState(null);
@@ -176,18 +180,54 @@ export default function SmartBudgetApp() {
   const fileInputRef = useRef(null); 
   
   // Forms State
-  const [newIncome, setNewIncome] = useState({ source: '', gross: '', net: '', date: new Date().toISOString().split('T')[0], payPeriod: '' });
+  const [newIncome, setNewIncome] = useState({ 
+    source: '', 
+    gross: '', 
+    net: '', 
+    date: new Date().toISOString().split('T')[0], 
+    payPeriod: '' 
+  });
   const [isAutoCalc, setIsAutoCalc] = useState(true);
-  const [newLiability, setNewLiability] = useState({ name: '', type: 'revolving', statementBal: '', currentBal: '', minPayment: '', apr: '', closingDay: '', dueDay: '' });
-  const [manualBill, setManualBill] = useState({ name: '', amount: '', date: new Date().toISOString().split('T')[0], category: 'Uncategorized', recurring: false });
-  const [newExpense, setNewExpense] = useState({ name: '', amount: '', date: new Date().toISOString().split('T')[0], paymentMethod: 'bank', category: 'Food' });
+  
+  const [newLiability, setNewLiability] = useState({ 
+    name: '', 
+    type: 'revolving', 
+    statementBal: '', 
+    currentBal: '', 
+    minPayment: '', 
+    apr: '', 
+    closingDay: '', 
+    dueDay: '' 
+  });
+  
+  const [manualBill, setManualBill] = useState({ 
+    name: '', 
+    amount: '', 
+    date: new Date().toISOString().split('T')[0], 
+    category: 'Uncategorized', 
+    recurring: false 
+  });
+  
+  const [newExpense, setNewExpense] = useState({ 
+    name: '', 
+    amount: '', 
+    date: new Date().toISOString().split('T')[0], 
+    paymentMethod: 'bank', 
+    category: 'Food' 
+  });
+
+  const [entryMode, setEntryMode] = useState('manual');
 
   // Modal State
   const [chargeModalOpen, setChargeModalOpen] = useState(false);
   const [selectedLiability, setSelectedLiability] = useState(null);
-  const [newCharge, setNewCharge] = useState({ amount: '', date: new Date().toISOString().split('T')[0], description: '' });
+  const [newCharge, setNewCharge] = useState({ 
+    amount: '', 
+    date: new Date().toISOString().split('T')[0], 
+    description: '' 
+  });
 
-  // --- Auth & Sync ---
+  // --- 1. Authentication Listener ---
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
@@ -196,8 +236,10 @@ export default function SmartBudgetApp() {
     return () => unsubscribe();
   }, []);
 
+  // --- 2. Data Syncing (PRIVATE PATH) ---
   useEffect(() => {
     if (!user) return;
+
     const createListener = (collectionName, setter) => {
       const q = collection(db, 'artifacts', appId, 'users', user.uid, collectionName);
       return onSnapshot(q, (snapshot) => {
@@ -217,35 +259,81 @@ export default function SmartBudgetApp() {
     const unsubHistory = createListener('historicalPaychecks', setHistoricalPaychecks);
 
     const configRef = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'budget_config');
-    onSnapshot(configRef, (doc) => { if (doc.exists()) setBudgetConfig(doc.data()); });
+    onSnapshot(configRef, (doc) => { 
+        if (doc.exists()) setBudgetConfig(doc.data()); 
+    });
 
-    return () => { unsubIncomes(); unsubBills(); unsubLiabilities(); unsubHistory(); unsubExpenses(); };
+    return () => { 
+        unsubIncomes(); 
+        unsubBills(); 
+        unsubLiabilities(); 
+        unsubHistory(); 
+        unsubExpenses(); 
+    };
   }, [user]);
 
-  // --- Handlers ---
+  // --- Auth Handlers ---
   const handleGoogleLogin = async () => {
-    try { await signInWithPopup(auth, new GoogleAuthProvider()); } catch (error) { setAuthError(error.message); }
+    try { 
+        await signInWithPopup(auth, new GoogleAuthProvider()); 
+    } catch (error) { 
+        setAuthError(error.message); 
+    }
   };
 
   const handleEmailAuth = async (e) => {
-    e.preventDefault(); setAuthError('');
+    e.preventDefault(); 
+    setAuthError('');
     try {
-      if (authMode === 'login') await signInWithEmailAndPassword(auth, email, password);
-      else {
+      if (authMode === 'login') {
+          await signInWithEmailAndPassword(auth, email, password);
+      } else {
         const res = await createUserWithEmailAndPassword(auth, email, password);
         await updateProfile(res.user, { displayName: fullName });
       }
-    } catch (error) { setAuthError(error.message); }
+    } catch (error) { 
+        setAuthError(error.message); 
+    }
   };
 
   const handleLogout = async () => {
     await signOut(auth);
-    setIncomes([]); setBills([]); setLiabilities([]);
+    setIncomes([]); 
+    setBills([]); 
+    setLiabilities([]);
+    setExpenses([]);
   };
 
+  const handleUpdateProfileName = async (e) => {
+    e.preventDefault();
+    if (!tempName.trim()) return;
+    try {
+      await updateProfile(user, { displayName: tempName });
+      setDisplayName(tempName);
+      setIsEditingProfile(false);
+    } catch (e) { console.error("Error saving profile", e); }
+  };
+
+  const handleSaveBudgetConfig = async () => {
+    if (!user) return;
+    try {
+      await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'budget_config'), { 
+        ...budgetConfig 
+      });
+      alert("Budget cycle settings saved!");
+    } catch (e) { 
+        alert("Error saving config"); 
+    }
+  };
+
+  // --- Data Ops (Private Path) ---
   const addItem = async (collectionName, item) => {
     if (!user) throw new Error("User not authenticated");
-    await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, collectionName), { ...item, paid: false, createdAt: new Date().toISOString() });
+    await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, collectionName), { 
+        ...item, 
+        paid: false, 
+        createdAt: new Date().toISOString() 
+    });
   };
 
   const updateItem = async (collectionName, id, updates) => {
@@ -263,18 +351,34 @@ export default function SmartBudgetApp() {
     if (historicalPaychecks.length === 0) return { rate: 0, label: '0%' };
     const totalGross = historicalPaychecks.reduce((acc, curr) => acc + Number(curr.gross), 0);
     const totalNet = historicalPaychecks.reduce((acc, curr) => acc + Number(curr.net), 0);
-    return { rate: 1 - (totalNet / totalGross), label: `${((1 - (totalNet / totalGross)) * 100).toFixed(1)}%` };
+    return { 
+        rate: 1 - (totalNet / totalGross), 
+        label: `${((1 - (totalNet / totalGross)) * 100).toFixed(1)}%` 
+    };
   }, [historicalPaychecks]);
 
   const currentBudgetCycle = useMemo(() => {
     const start = new Date(budgetConfig.startDate);
     const today = new Date();
-    const freqDays = { 'weekly': 7, 'bi-weekly': 14, 'semi-monthly': 15, 'monthly': 30 }[budgetConfig.frequency] || 14;
+    const freqDays = { 
+        'weekly': 7, 
+        'bi-weekly': 14, 
+        'semi-monthly': 15, 
+        'monthly': 30 
+    }[budgetConfig.frequency] || 14;
+
     const diffDays = Math.ceil(Math.abs(today - start) / (1000 * 60 * 60 * 24)); 
     const cyclesPassed = Math.floor(diffDays / freqDays);
+    
     let cycleStart = new Date(start);
-    if (start < today) { cycleStart.setDate(start.getDate() + (cyclesPassed * freqDays)); if (cycleStart > today) cycleStart.setDate(cycleStart.getDate() - freqDays); }
-    const cycleEnd = new Date(cycleStart); cycleEnd.setDate(cycleStart.getDate() + freqDays - 1); 
+    if (start < today) { 
+        cycleStart.setDate(start.getDate() + (cyclesPassed * freqDays)); 
+        if (cycleStart > today) cycleStart.setDate(cycleStart.getDate() - freqDays); 
+    }
+    
+    const cycleEnd = new Date(cycleStart); 
+    cycleEnd.setDate(cycleStart.getDate() + freqDays - 1); 
+    
     return { start: cycleStart, end: cycleEnd };
   }, [budgetConfig]);
 
@@ -298,28 +402,42 @@ export default function SmartBudgetApp() {
   const categorizedObligations = useMemo(() => {
     const { start, end } = currentBudgetCycle;
     let overdue = [], current = [], future = [];
+    
     const categorize = (item, dueDate, isPaid) => {
-      const d = new Date(dueDate); d.setHours(0,0,0,0);
+      const d = new Date(dueDate); 
+      d.setHours(0,0,0,0);
       const itemWithDate = { ...item, dueDateDisplay: d.toISOString().split('T')[0] };
+      
       if (d < start && !isPaid) overdue.push(itemWithDate);
       else if (d >= start && d <= end) current.push(itemWithDate);
       else if (d > end) future.push(itemWithDate);
     };
-    bills.forEach(b => { if (b.date) categorize({ ...b, type: 'bill' }, b.date, b.paid); });
+
+    bills.forEach(b => { 
+        if (b.date) categorize({ ...b, type: 'bill' }, b.date, b.paid); 
+    });
+
     liabilities.forEach(l => {
       let d = l.dueDay ? getNextOccurrence(l.dueDay) : (l.dueDate ? new Date(l.dueDate) : null);
       if (d) {
         let isPaidForCycle = false;
-        if (l.lastPaymentDate) { const pd = new Date(l.lastPaymentDate); if (pd >= start && pd <= end) isPaidForCycle = true; }
+        if (l.lastPaymentDate) { 
+            const pd = new Date(l.lastPaymentDate); 
+            if (pd >= start && pd <= end) isPaidForCycle = true; 
+        }
         categorize({ ...l, type: 'liability', amount: l.minPayment, paid: isPaidForCycle }, d, isPaidForCycle);
       }
     });
+
     const sorter = (a, b) => new Date(a.dueDateDisplay) - new Date(b.dueDateDisplay);
-    return { overdue: overdue.sort(sorter), current: current.sort(sorter), future: future.sort(sorter) };
+    return { 
+        overdue: overdue.sort(sorter), 
+        current: current.sort(sorter), 
+        future: future.sort(sorter) 
+    };
   }, [bills, liabilities, currentBudgetCycle]);
 
   // --- Image & Expense Handlers ---
-
   const handleImageUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -333,8 +451,11 @@ export default function SmartBudgetApp() {
         const result = JSON.parse(jsonStr.replace(/```json/g, '').replace(/```/g, '').trim());
         setNewExpense({ ...newExpense, name: result.name, amount: result.amount, date: result.date, category: result.category });
         alert(`Scanned: ${result.name} - $${result.amount}`);
-      } catch (err) { alert("Could not scan receipt."); } 
-      finally { setAiParseLoading(false); }
+      } catch (err) { 
+          alert("Could not scan receipt."); 
+      } finally { 
+          setAiParseLoading(false); 
+      }
     };
     reader.readAsDataURL(file);
   };
@@ -344,27 +465,23 @@ export default function SmartBudgetApp() {
     try {
       await addItem('expenses', { ...newExpense, amount: parseFloat(newExpense.amount) });
       
-      // Update liability balance if selected
       if (newExpense.paymentMethod !== 'bank') {
         const liability = liabilities.find(l => l.id === newExpense.paymentMethod);
         if (liability) {
           const newBal = parseFloat(liability.currentBal) + parseFloat(newExpense.amount);
           await updateItem('liabilities', liability.id, { currentBal: newBal });
-          
-          // Logic: Check if transaction date is after closing date. If so, it goes to next statement.
-          // For now, simply adding to current balance is correct. Statement closing logic handles the "move to statement balance".
           alert(`Added to expenses and updated ${liability.name} balance.`);
         }
       } else {
         alert("Expense added.");
       }
       setNewExpense({ name: '', amount: '', date: new Date().toISOString().split('T')[0], paymentMethod: 'bank', category: 'Food' });
-    } catch (e) { alert("Error adding expense: " + e.message); }
+    } catch (e) { 
+        alert("Error adding expense: " + e.message); 
+    }
   };
 
   // --- Specific Handlers ---
-  const handleSaveBudgetConfig = async () => { if (!user) return; await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'budget_config'), { ...budgetConfig }); alert("Saved!"); };
-  
   const handleAddHistorical = (e) => { 
     e.preventDefault(); 
     const gross = parseFloat(e.target.gross.value); 
@@ -377,12 +494,22 @@ export default function SmartBudgetApp() {
 
   const handleGrossChange = (e) => { 
     const gross = e.target.value; 
-    setNewIncome(prev => ({ ...prev, gross, net: isAutoCalc ? (gross * (1 - deductionStats.rate)).toFixed(2) : prev.net })); 
+    setNewIncome(prev => ({ 
+        ...prev, 
+        gross, 
+        net: isAutoCalc ? (gross * (1 - deductionStats.rate)).toFixed(2) : prev.net 
+    })); 
   };
 
   const handleAddIncome = async () => { 
     if (!newIncome.source || !newIncome.net) return; 
-    await addItem('incomes', { source: newIncome.source, amount: parseFloat(newIncome.net), date: newIncome.date, payPeriod: newIncome.payPeriod, type: 'variable' }); 
+    await addItem('incomes', { 
+        source: newIncome.source, 
+        amount: parseFloat(newIncome.net), 
+        date: newIncome.date, 
+        payPeriod: newIncome.payPeriod, 
+        type: 'variable' 
+    }); 
     setNewIncome({ source: '', gross: '', net: '', date: new Date().toISOString().split('T')[0], payPeriod: '' }); 
   };
 
@@ -414,8 +541,11 @@ export default function SmartBudgetApp() {
       const jsonStr = await callGemini(prompt); 
       const result = JSON.parse(jsonStr.replace(/```json/g, '').replace(/```/g, '').trim()); 
       setParsedResult(result); 
-    } catch (e) { alert("AI Parsing failed."); } 
-    finally { setAiParseLoading(false); } 
+    } catch (e) { 
+        alert("AI Parsing failed."); 
+    } finally { 
+        setAiParseLoading(false); 
+    } 
   };
 
   const confirmParsedBill = async () => { 
@@ -449,8 +579,11 @@ export default function SmartBudgetApp() {
     try { 
       const advice = await callGemini(prompt); 
       setAiAdvice(advice); 
-    } catch (e) { setAiAdvice("AI unavailable."); } 
-    finally { setAiLoading(false); } 
+    } catch (e) { 
+        setAiAdvice("AI unavailable."); 
+    } finally { 
+        setAiLoading(false); 
+    } 
   };
 
   const handleConfirmCharge = async () => {
@@ -481,21 +614,33 @@ export default function SmartBudgetApp() {
 
   const renderDashboard = () => (
     <div className="space-y-6 animate-in fade-in">
+      {/* AI Advisor & Summary Cards */}
       <Card className="p-6 border-l-4 border-l-purple-500 bg-purple-50">
         <div className="flex items-start justify-between">
           <div className="flex items-start gap-4">
             <div className="p-3 rounded-full bg-purple-200 text-purple-700"><Sparkles size={24} /></div>
-            <div><h3 className="text-lg font-bold text-slate-800">AI Financial Advisor</h3><p className="text-slate-600 mt-1 text-sm">{aiAdvice || "Get smart analysis of your budget."}</p></div>
+            <div>
+                <h3 className="text-lg font-bold text-slate-800">AI Financial Advisor</h3>
+                <p className="text-slate-600 mt-1 text-sm">{aiAdvice || "Get smart analysis of your budget."}</p>
+            </div>
           </div>
-          <Button onClick={generateAiAdvice} variant="magic" disabled={aiLoading} className="shrink-0">{aiLoading ? <Loader2 className="animate-spin" /> : "Get Insights"}</Button>
+          <Button onClick={generateAiAdvice} variant="magic" disabled={aiLoading} className="shrink-0">
+            {aiLoading ? <Loader2 className="animate-spin" /> : "Get Insights"}
+          </Button>
         </div>
         {aiAdvice && <div className="mt-4 p-4 bg-white rounded-lg border border-purple-100 text-slate-700 text-sm">{aiAdvice}</div>}
       </Card>
 
+      {/* Obligations Tracker */}
       <Card className="p-6 bg-slate-800 text-white">
         <div className="flex items-center justify-between mb-4">
-           <div className="flex items-center gap-2"><Clock className="text-yellow-400" size={20} /><h3 className="text-lg font-bold">Obligations</h3></div>
-           <div className="text-xs bg-slate-700 px-2 py-1 rounded text-slate-300">{currentBudgetCycle.start.toLocaleDateString()} - {currentBudgetCycle.end.toLocaleDateString()}</div>
+           <div className="flex items-center gap-2">
+             <Clock className="text-yellow-400" size={20} />
+             <h3 className="text-lg font-bold">Obligations</h3>
+           </div>
+           <div className="text-xs bg-slate-700 px-2 py-1 rounded text-slate-300">
+             {currentBudgetCycle.start.toLocaleDateString()} - {currentBudgetCycle.end.toLocaleDateString()}
+           </div>
         </div>
         <div className="space-y-4">
           {categorizedObligations.overdue.length > 0 && (
@@ -504,32 +649,83 @@ export default function SmartBudgetApp() {
               {categorizedObligations.overdue.map((item, idx) => (
                 <div key={idx} className="flex justify-between items-center py-1">
                   <span className="text-sm">{item.name}</span>
-                  <div className="flex gap-2"><span className="text-red-400 font-bold">${Number(item.amount).toFixed(2)}</span><button onClick={() => item.type === 'bill' ? toggleBillPaid(item) : toggleLiabilityPaid(item)}><Square className="text-red-400" size={16} /></button></div>
+                  <div className="flex gap-2">
+                    <span className="text-red-400 font-bold">${Number(item.amount).toFixed(2)}</span>
+                    <button onClick={() => item.type === 'bill' ? toggleBillPaid(item) : toggleLiabilityPaid(item)}>
+                        <Square className="text-red-400" size={16} />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
           )}
-          {categorizedObligations.current.length === 0 ? <p className="text-slate-500 text-sm italic">No pending bills this cycle.</p> : categorizedObligations.current.filter(i => !i.paid).map((item, idx) => (
+          {categorizedObligations.current.length === 0 ? (
+            <p className="text-slate-500 text-sm italic">No pending bills this cycle.</p>
+          ) : (
+            categorizedObligations.current.filter(i => !i.paid).map((item, idx) => (
              <div key={idx} className="flex justify-between items-center bg-slate-700/50 p-2 rounded">
                 <span className="text-sm">{item.name}</span>
-                <div className="flex gap-2 items-center"><span className="font-bold text-white">${Number(item.amount).toFixed(2)}</span><button onClick={() => item.type === 'bill' ? toggleBillPaid(item) : toggleLiabilityPaid(item)}><Square className="text-slate-400 hover:text-green-400" size={18} /></button></div>
+                <div className="flex gap-2 items-center">
+                    <span className="font-bold text-white">${Number(item.amount).toFixed(2)}</span>
+                    <button onClick={() => item.type === 'bill' ? toggleBillPaid(item) : toggleLiabilityPaid(item)}>
+                        <Square className="text-slate-400 hover:text-green-400" size={18} />
+                    </button>
+                </div>
              </div>
-          ))}
+            ))
+          )}
           <div className="pt-2 border-t border-slate-700">
-             <button onClick={() => setShowFuture(!showFuture)} className="w-full flex items-center justify-between text-xs text-slate-400 hover:text-white p-2 rounded hover:bg-slate-700"><span>Future Obligations ({categorizedObligations.future.length})</span>{showFuture ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
-             {showFuture && <div className="mt-2 space-y-1 pl-2 border-l-2 border-slate-600">{categorizedObligations.future.map((item, idx) => <div key={idx} className="flex justify-between py-1 text-xs"><span className="text-slate-300">{item.name} <span className="text-slate-500">({item.dueDateDisplay})</span></span><span className="text-slate-400">${Number(item.amount).toFixed(2)}</span></div>)}</div>}
+             <button onClick={() => setShowFuture(!showFuture)} className="w-full flex items-center justify-between text-xs text-slate-400 hover:text-white p-2 rounded hover:bg-slate-700">
+                <span>Future Obligations ({categorizedObligations.future.length})</span>
+                {showFuture ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+             </button>
+             {showFuture && (
+                <div className="mt-2 space-y-1 pl-2 border-l-2 border-slate-600">
+                    {categorizedObligations.future.map((item, idx) => (
+                        <div key={idx} className="flex justify-between py-1 text-xs">
+                            <span className="text-slate-300">{item.name} <span className="text-slate-500">({item.dueDateDisplay})</span></span>
+                            <span className="text-slate-400">${Number(item.amount).toFixed(2)}</span>
+                        </div>
+                    ))}
+                </div>
+             )}
           </div>
         </div>
       </Card>
 
+      {/* Stats Grid */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card className="p-4 border-l-4 border-l-green-500"><p className="text-xs font-bold text-slate-500 uppercase">Income</p><h3 className="text-xl font-bold text-slate-800">${totalIncome.toLocaleString()}</h3></Card>
-        <Card className="p-4 border-l-4 border-l-red-500 relative">
-          <button onClick={() => setExpandedExpenses(!expandedExpenses)} className="w-full text-left"><div className="flex justify-between"><div><p className="text-xs font-bold text-slate-500 uppercase flex items-center gap-1">Expenses {expandedExpenses ? <ChevronUp size={12}/> : <ChevronDown size={12}/>}</p><h3 className="text-xl font-bold text-slate-800">${totalExpenses.toLocaleString()}</h3></div></div></button>
-          {expandedExpenses && <div className="mt-3 pt-3 border-t border-slate-100 text-xs space-y-1"><div className="flex justify-between"><span className="text-slate-500">Bills:</span><span className="font-medium">${totalBillExpenses.toFixed(2)}</span></div><div className="flex justify-between"><span className="text-slate-500">Misc:</span><span className="font-medium">${totalMiscExpenses.toFixed(2)}</span></div><div className="flex justify-between"><span className="text-slate-500">Debt Min:</span><span className="font-medium">${totalMinPayments.toFixed(2)}</span></div></div>}
+        <Card className="p-4 border-l-4 border-l-green-500">
+            <p className="text-xs font-bold text-slate-500 uppercase">Income</p>
+            <h3 className="text-xl font-bold text-slate-800">${totalIncome.toLocaleString()}</h3>
         </Card>
-        <Card className="p-4 border-l-4 border-l-purple-500"><p className="text-xs font-bold text-slate-500 uppercase">Total Debt</p><h3 className="text-xl font-bold text-purple-700">${totalDebt.toLocaleString()}</h3></Card>
-        <Card className="p-4 border-l-4 border-l-blue-500"><p className="text-xs font-bold text-slate-500 uppercase">Remaining</p><h3 className={`text-xl font-bold ${remaining >= 0 ? 'text-blue-600' : 'text-orange-600'}`}>${remaining.toLocaleString()}</h3></Card>
+        <Card className="p-4 border-l-4 border-l-red-500 relative">
+          <button onClick={() => setExpandedExpenses(!expandedExpenses)} className="w-full text-left">
+            <div className="flex justify-between">
+                <div>
+                    <p className="text-xs font-bold text-slate-500 uppercase flex items-center gap-1">
+                        Expenses {expandedExpenses ? <ChevronUp size={12}/> : <ChevronDown size={12}/>}
+                    </p>
+                    <h3 className="text-xl font-bold text-slate-800">${totalExpenses.toLocaleString()}</h3>
+                </div>
+            </div>
+          </button>
+          {expandedExpenses && (
+            <div className="mt-3 pt-3 border-t border-slate-100 text-xs space-y-1">
+                <div className="flex justify-between"><span className="text-slate-500">Bills:</span><span className="font-medium">${totalBillExpenses.toFixed(2)}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">Misc:</span><span className="font-medium">${totalMiscExpenses.toFixed(2)}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">Debt Min:</span><span className="font-medium">${totalMinPayments.toFixed(2)}</span></div>
+            </div>
+          )}
+        </Card>
+        <Card className="p-4 border-l-4 border-l-purple-500">
+            <p className="text-xs font-bold text-slate-500 uppercase">Total Debt</p>
+            <h3 className="text-xl font-bold text-purple-700">${totalDebt.toLocaleString()}</h3>
+        </Card>
+        <Card className="p-4 border-l-4 border-l-blue-500">
+            <p className="text-xs font-bold text-slate-500 uppercase">Remaining</p>
+            <h3 className={`text-xl font-bold ${remaining >= 0 ? 'text-blue-600' : 'text-orange-600'}`}>${remaining.toLocaleString()}</h3>
+        </Card>
       </div>
     </div>
   );
@@ -549,10 +745,36 @@ export default function SmartBudgetApp() {
       <Card className="p-6 border-blue-100 shadow-md">
         <h3 className="text-lg font-bold text-slate-800 mb-4">Add Expense</h3>
         <div className="space-y-4">
-          <div><label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Merchant / Description</label><input type="text" placeholder="e.g. Starbucks" value={newExpense.name} onChange={e => setNewExpense({...newExpense, name: e.target.value})} className="w-full p-3 border border-slate-200 rounded-lg" /></div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Merchant / Description</label>
+            <input 
+              type="text" 
+              placeholder="e.g. Starbucks, Shell Gas"
+              value={newExpense.name}
+              onChange={e => setNewExpense({...newExpense, name: e.target.value})}
+              className="w-full p-3 border border-slate-200 rounded-lg"
+            />
+          </div>
           <div className="grid grid-cols-2 gap-4">
-            <div><label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Amount</label><input type="number" placeholder="0.00" value={newExpense.amount} onChange={e => setNewExpense({...newExpense, amount: e.target.value})} className="w-full p-3 border border-slate-200 rounded-lg" /></div>
-            <div><label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Date</label><input type="date" value={newExpense.date} onChange={e => setNewExpense({...newExpense, date: e.target.value})} className="w-full p-3 border border-slate-200 rounded-lg" /></div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Amount</label>
+              <input 
+                type="number" 
+                placeholder="0.00"
+                value={newExpense.amount}
+                onChange={e => setNewExpense({...newExpense, amount: e.target.value})}
+                className="w-full p-3 border border-slate-200 rounded-lg"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Date</label>
+              <input 
+                type="date" 
+                value={newExpense.date}
+                onChange={e => setNewExpense({...newExpense, date: e.target.value})}
+                className="w-full p-3 border border-slate-200 rounded-lg"
+              />
+            </div>
           </div>
           <div>
             <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Payment Method</label>
@@ -573,8 +795,14 @@ export default function SmartBudgetApp() {
         <h4 className="font-semibold text-slate-700">Recent Transactions</h4>
         {expenses.slice(0, 5).map(exp => (
           <div key={exp.id} className="flex justify-between items-center bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
-            <div><p className="font-medium text-slate-800">{exp.name}</p><div className="flex gap-2 text-xs text-slate-500"><span>{exp.date}</span><span className="bg-slate-100 px-1 rounded">{exp.category}</span></div></div>
-            <div className="text-right"><span className="font-bold text-slate-800">-${Number(exp.amount).toFixed(2)}</span><button onClick={() => deleteItem('expenses', exp.id)} className="ml-3 text-slate-400 hover:text-red-500"><Trash2 size={16} /></button></div>
+            <div>
+                <p className="font-medium text-slate-800">{exp.name}</p>
+                <div className="flex gap-2 text-xs text-slate-500"><span>{exp.date}</span><span className="bg-slate-100 px-1 rounded">{exp.category}</span></div>
+            </div>
+            <div className="text-right">
+                <span className="font-bold text-slate-800">-${Number(exp.amount).toFixed(2)}</span>
+                <button onClick={() => deleteItem('expenses', exp.id)} className="ml-3 text-slate-400 hover:text-red-500"><Trash2 size={16} /></button>
+            </div>
           </div>
         ))}
         {expenses.length === 0 && <p className="text-center text-slate-400 py-4">No expenses recorded yet.</p>}
@@ -708,6 +936,28 @@ export default function SmartBudgetApp() {
 
   return (
     <div className="min-h-screen bg-slate-100 font-sans text-slate-900 pb-24">
+       {/* --- TOP HEADER NAVIGATION (Restored!) --- */}
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-10 hidden md:block">
+        <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="bg-blue-600 p-2 rounded-lg text-white"><Calculator size={20} /></div>
+            <h1 className="font-bold text-xl">SmartBudget</h1>
+          </div>
+          <nav className="flex gap-1 bg-slate-100 p-1 rounded-lg">
+            {['dashboard', 'income', 'bills', 'expenses', 'liabilities', 'profile'].map((tab) => (
+              <button 
+                key={tab} 
+                onClick={() => setActiveTab(tab)} 
+                className={`px-4 py-2 text-sm font-medium rounded-md capitalize transition-all ${activeTab === tab ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+              >
+                {tab}
+              </button>
+            ))}
+          </nav>
+        </div>
+      </header>
+
+      {/* --- MAIN CONTENT --- */}
       <main className="max-w-5xl mx-auto px-4 py-6">
         {activeTab === 'dashboard' && renderDashboard()}
         {activeTab === 'bills' && renderParser()}
@@ -716,10 +966,26 @@ export default function SmartBudgetApp() {
         {activeTab === 'liabilities' && renderLiabilities()}
         {activeTab === 'profile' && renderProfile()}
       </main>
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t px-4 py-2 z-50">
+
+      {/* --- BOTTOM MOBILE NAVIGATION (Kept for mobile users) --- */}
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t px-4 py-2 z-50 md:hidden">
         <div className="max-w-md mx-auto flex justify-between items-center">
-          {[{ id: 'dashboard', icon: <TrendingUp size={20} />, label: 'Dash' }, { id: 'bills', icon: <Receipt size={20} />, label: 'Bills' }, { id: 'expenses', icon: <DollarSign size={20} />, label: 'Spend' }, { id: 'income', icon: <Landmark size={20} />, label: 'Income' }, { id: 'liabilities', icon: <CreditCard size={20} />, label: 'Debt' }, { id: 'profile', icon: <User size={20} />, label: 'Profile' }].map(tab => (
-            <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-all ${activeTab === tab.id ? 'text-blue-600 bg-blue-50' : 'text-slate-400'}`}>{tab.icon}<span className="text-[10px] font-medium">{tab.label}</span></button>
+          {[
+            { id: 'dashboard', icon: <TrendingUp size={20} />, label: 'Dash' }, 
+            { id: 'bills', icon: <Receipt size={20} />, label: 'Bills' }, 
+            { id: 'expenses', icon: <DollarSign size={20} />, label: 'Spend' }, 
+            { id: 'income', icon: <Landmark size={20} />, label: 'Income' }, 
+            { id: 'liabilities', icon: <CreditCard size={20} />, label: 'Debt' }, 
+            { id: 'profile', icon: <User size={20} />, label: 'Profile' }
+          ].map(tab => (
+            <button 
+              key={tab.id} 
+              onClick={() => setActiveTab(tab.id)} 
+              className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-all ${activeTab === tab.id ? 'text-blue-600 bg-blue-50' : 'text-slate-400'}`}
+            >
+              {tab.icon}
+              <span className="text-[10px] font-medium">{tab.label}</span>
+            </button>
           ))}
         </div>
       </div>
