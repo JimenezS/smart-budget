@@ -77,10 +77,10 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 // --- API Helper ---
 const callGemini = async (prompt, imageBase64 = null) => {
   // *** DEPLOYMENT STEP: UNCOMMENT THE LINE BELOW IN VS CODE ***
-  const apiKey = import.meta.env.VITE_GEMINI_KEY;
+   const apiKey = import.meta.env.VITE_GEMINI_KEY;
   
   // Keep this empty string for the preview to load without errors
-  // const apiKey = ""; 
+  //const apiKey = ""; 
   
   try {
     const parts = [{ text: prompt }];
