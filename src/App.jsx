@@ -688,115 +688,168 @@ export default function SmartBudgetApp() {
     </div>
   );
 
-  const renderIncome = () => (
-    <div className="space-y-6 animate-in fade-in">
-       <Card className="p-6 bg-blue-50 border-blue-200">
-          <h3 className="font-bold text-slate-800 flex items-center gap-2 mb-4"><Settings size={18}/> Master Budget Schedule</h3>
+  const renderParser = () => (
+    <div className="max-w-2xl mx-auto space-y-6 animate-in fade-in">
+      <div className="flex justify-center mb-6">
+        <div className="bg-slate-100 p-1 rounded-lg flex">
+          <button onClick={() => setEntryMode('manual')} className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${entryMode === 'manual' ? 'bg-white shadow text-blue-600' : 'text-slate-500'}`}>Manual Entry</button>
+          <button onClick={() => setEntryMode('scan')} className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${entryMode === 'scan' ? 'bg-white shadow text-purple-600' : 'text-slate-500'}`}>Scan with AI</button>
+        </div>
+      </div>
+      {entryMode === 'scan' ? (
+        <Card className="p-6">
+          <textarea value={parseText} onChange={(e) => setParseText(e.target.value)} placeholder="Paste bill text..." className="w-full h-40 p-4 border rounded-lg mb-4 font-mono text-sm" />
+          <div className="flex justify-end"><Button onClick={handleAiParse} variant="magic" disabled={aiParseLoading}>{aiParseLoading ? <Loader2 className="animate-spin" /> : "Parse"}</Button></div>
+        </Card>
+      ) : (
+        <Card className="p-6">
+          <h3 className="text-lg font-bold text-slate-800 mb-4">Add Bill Manually</h3>
+          <div className="space-y-4">
+            <div><label className="text-xs font-bold uppercase text-slate-500">Name</label><input value={manualBill.name} onChange={e => setManualBill({...manualBill, name: e.target.value})} className="w-full p-3 border rounded" /></div>
+            <div className="grid grid-cols-2 gap-4">
+              <div><label className="text-xs font-bold uppercase text-slate-500">Amount</label><input type="number" value={manualBill.amount} onChange={e => setManualBill({...manualBill, amount: e.target.value})} className="w-full p-3 border rounded" /></div>
+              <div><label className="text-xs font-bold uppercase text-slate-500">Date</label><input type="date" value={manualBill.date} onChange={e => setManualBill({...manualBill, date: e.target.value})} className="w-full p-3 border rounded" /></div>
+            </div>
+            <div className="flex items-center gap-2 p-3 bg-slate-50 rounded border"><input type="checkbox" checked={manualBill.recurring} onChange={e => setManualBill({...manualBill, recurring: e.target.checked})} /><label className="text-sm">Recurring Monthly</label></div>
+            <Button onClick={handleAddManualBill} className="w-full">Save Bill</Button>
+          </div>
+        </Card>
+      )}
+      {parsedResult && entryMode === 'scan' && (
+        <Card className="p-6 bg-purple-50 border-purple-100 mt-4">
+          <div className="space-y-4">
+             <div className="grid grid-cols-2 gap-4">
+                <input value={parsedResult.name} onChange={e => setParsedResult({...parsedResult, name: e.target.value})} className="p-2 border rounded" />
+                <input type="number" value={parsedResult.amount} onChange={e => setParsedResult({...parsedResult, amount: e.target.value})} className="p-2 border rounded" />
+             </div>
+             <input type="date" value={parsedResult.date} onChange={e => setParsedResult({...parsedResult, date: e.target.value})} className="w-full p-2 border rounded" />
+             <div className="flex gap-2"><Button onClick={confirmParsedBill} className="w-full">Add</Button><Button onClick={() => setParsedResult(null)} variant="secondary">Cancel</Button></div>
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+
+  const renderExpenses = () => (
+    <div className="max-w-xl mx-auto space-y-6 animate-in fade-in">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-2xl font-bold text-slate-800">Daily Expenses</h2>
+        <div>
+          <input type="file" accept="image/*" capture="environment" className="hidden" ref={fileInputRef} onChange={handleImageUpload} />
+          <Button onClick={() => fileInputRef.current?.click()} variant="magic" disabled={aiParseLoading}>
+            {aiParseLoading ? <Loader2 className="animate-spin" size={18} /> : <><Camera size={18} /> Scan Receipt</>}
+          </Button>
+        </div>
+      </div>
+
+      <Card className="p-6 border-blue-100 shadow-md">
+        <h3 className="text-lg font-bold text-slate-800 mb-4">Add Expense</h3>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Merchant / Description</label>
+            <input 
+              type="text" 
+              placeholder="e.g. Starbucks, Shell Gas"
+              value={newExpense.name}
+              onChange={e => setNewExpense({...newExpense, name: e.target.value})}
+              className="w-full p-3 border border-slate-200 rounded-lg"
+            />
+          </div>
           <div className="grid grid-cols-2 gap-4">
-             <div><label className="text-xs font-bold text-blue-800 uppercase">Cycle Start</label><input type="date" value={budgetConfig.startDate} onChange={e=>setBudgetConfig({...budgetConfig, startDate:e.target.value})} className="w-full p-2 border rounded"/></div>
-             <div>
-                <label className="text-xs font-bold text-blue-800 uppercase">Pay Date (Effective)</label>
-                <input type="date" value={budgetConfig.payDate} onChange={e=>setBudgetConfig({...budgetConfig, payDate:e.target.value})} className="w-full p-2 border rounded"/>
-             </div>
-             <div><label className="text-xs font-bold text-blue-800 uppercase">Frequency</label><select value={budgetConfig.frequency} onChange={e=>setBudgetConfig({...budgetConfig, frequency:e.target.value})} className="w-full p-2 border rounded"><option value="weekly">Weekly</option><option value="bi-weekly">Bi-Weekly</option><option value="monthly">Monthly</option></select></div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Amount</label>
+              <input 
+                type="number" 
+                placeholder="0.00"
+                value={newExpense.amount}
+                onChange={e => setNewExpense({...newExpense, amount: e.target.value})}
+                className="w-full p-3 border border-slate-200 rounded-lg"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Date</label>
+              <input 
+                type="date" 
+                value={newExpense.date}
+                onChange={e => setNewExpense({...newExpense, date: e.target.value})}
+                className="w-full p-3 border border-slate-200 rounded-lg"
+              />
+            </div>
           </div>
-          <p className="text-xs text-blue-600 mt-2">Current Cycle: <b>{formatLocalDate(calculatedCycle.start)}</b> to <b>{formatLocalDate(calculatedCycle.end)}</b></p>
-          <Button onClick={handleSaveBudgetConfig} className="w-full mt-3 text-xs">Update Schedule</Button>
-       </Card>
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Payment Method</label>
+            <div className="relative">
+              <CreditCard className="absolute left-3 top-3 text-slate-400" size={18} />
+              <select value={newExpense.paymentMethod} onChange={e => setNewExpense({...newExpense, paymentMethod: e.target.value})} className="w-full pl-10 p-3 border border-slate-200 rounded-lg appearance-none bg-white">
+                <option value="bank">🏦 Bank Account / Cash</option>
+                {liabilities.filter(l => l.type === 'revolving').map(card => <option key={card.id} value={card.id}>💳 {card.name}</option>)}
+              </select>
+            </div>
+            {newExpense.paymentMethod !== 'bank' && <p className="text-xs text-blue-600 mt-1 flex items-center gap-1"><InfoIcon size={12} /> Adds to credit card balance.</p>}
+          </div>
+          <Button onClick={handleAddExpense} className="w-full">Save Expense</Button>
+        </div>
+      </Card>
 
-       <Card className="p-6 border-blue-100 shadow-md">
-          <div className="flex justify-between items-center mb-4"><h3 className="font-bold text-xl">Log Income</h3><div className="flex items-center gap-2 text-xs"><input type="checkbox" checked={newIncome.isOneTime} onChange={e=>setNewIncome({...newIncome, isOneTime:e.target.checked})}/> One-Time/Bonus</div></div>
-          <div className="space-y-3">
-             <input placeholder="Source Name (e.g. Work, Uber)" value={newIncome.source} onChange={e=>setNewIncome({...newIncome, source:e.target.value})} className="w-full p-3 border rounded"/>
-             {!newIncome.isOneTime && <div className="text-xs text-slate-500 bg-slate-50 p-2 rounded">Auto-Applying to Period: <b>{newIncome.payPeriod}</b></div>}
-             <div className="grid grid-cols-2 gap-3">
-                <div><label className="text-xs text-slate-500">Gross</label><input type="number" placeholder="0.00" value={newIncome.gross} onChange={handleGrossChange} className="w-full p-2 border rounded"/></div>
-                <div><label className="text-xs text-slate-500">Net (Take Home)</label><input type="number" placeholder="0.00" value={newIncome.net} onChange={e=>setNewIncome({...newIncome, net:e.target.value})} className="w-full p-2 border-2 border-green-500 rounded font-bold text-green-700"/></div>
-             </div>
-             {isAutoCalc && <div className="text-[10px] text-blue-500 text-right">Auto-calculating net using {deductionStats.label} deduction rate</div>}
-             <Button onClick={handleAddIncome} className="w-full">Add Income</Button>
+      <div className="space-y-2">
+        <h4 className="font-semibold text-slate-700">Recent Transactions</h4>
+        {expenses.slice(0, 5).map(exp => (
+          <div key={exp.id} className="flex justify-between items-center bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
+            <div><p className="font-medium text-slate-800">{exp.name}</p><div className="flex gap-2 text-xs text-slate-500"><span>{exp.date}</span><span className="bg-slate-100 px-1 rounded">{exp.category}</span></div></div>
+            <div className="text-right"><span className="font-bold text-slate-800">-${Number(exp.amount).toFixed(2)}</span><button onClick={() => deleteItem('expenses', exp.id)} className="ml-3 text-slate-400 hover:text-red-500"><Trash2 size={16} /></button></div>
           </div>
-       </Card>
-       
-       <div className="space-y-2">
-          <h4 className="font-bold text-slate-700 text-sm">Income History</h4>
-          {incomes.map(i => <div key={i.id} className="flex justify-between p-3 bg-white border rounded text-sm"><div><p className="font-medium">{i.source}</p><p className="text-xs text-slate-500">{i.payPeriod}</p></div><span className="font-bold text-green-600">+${i.amount}</span></div>)}
-       </div>
+        ))}
+        {expenses.length === 0 && <p className="text-center text-slate-400 py-4">No expenses recorded yet.</p>}
+      </div>
     </div>
   );
 
-  const renderLiabilities = () => (
-    <div className="space-y-6 animate-in fade-in">
-       <Card className="p-5 bg-slate-50 border-slate-200 sticky top-4">
-          <h3 className="font-bold mb-4 flex gap-2"><Plus size={18}/> Add Liability</h3>
-          <div className="space-y-3">
-             <div className="flex bg-white rounded p-1 border"><button onClick={()=>setNewLiability({...newLiability, type:'revolving'})} className={`flex-1 py-1 text-xs font-bold rounded ${newLiability.type==='revolving'?'bg-purple-100 text-purple-700':''}`}>Revolving</button><button onClick={()=>setNewLiability({...newLiability, type:'installment'})} className={`flex-1 py-1 text-xs font-bold rounded ${newLiability.type==='installment'?'bg-blue-100 text-blue-700':''}`}>Installment</button></div>
-             <input placeholder="Bank / Creditor Name" value={newLiability.name} onChange={e=>setNewLiability({...newLiability, name:e.target.value})} className="w-full p-2 border rounded"/>
-             
-             {newLiability.type === 'revolving' ? (
-                <>
-                   <div className="grid grid-cols-2 gap-2">
-                      <div><label className="text-[10px] uppercase text-slate-500">Statement Bal</label><div className="relative"><span className="absolute left-2 top-2 text-slate-400">$</span><input type="number" className="w-full pl-5 p-2 border rounded" value={newLiability.statementBal} onChange={e=>setNewLiability({...newLiability, statementBal:e.target.value})} /></div></div>
-                      <div><label className="text-[10px] uppercase text-slate-500">Current Bal</label><div className="relative"><span className="absolute left-2 top-2 text-slate-400">$</span><input type="number" className="w-full pl-5 p-2 border rounded" value={newLiability.currentBal} onChange={e=>setNewLiability({...newLiability, currentBal:e.target.value})} /></div></div>
-                   </div>
-                   <div className="grid grid-cols-2 gap-2">
-                      <div><label className="text-[10px] uppercase text-slate-500">Closing Day (1-31)</label><input type="number" min="1" max="31" className="w-full p-2 border rounded" value={newLiability.closingDay} onChange={e=>setNewLiability({...newLiability, closingDay:e.target.value})}/></div>
-                      <div><label className="text-[10px] uppercase text-slate-500">Due Day (1-31)</label><input type="number" min="1" max="31" className="w-full p-2 border rounded" value={newLiability.dueDay} onChange={e=>setNewLiability({...newLiability, dueDay:e.target.value})}/></div>
-                   </div>
-                </>
-             ) : (
-                <>
-                   <div><label className="text-[10px] uppercase text-slate-500">Remaining Principal</label><div className="relative"><span className="absolute left-2 top-2 text-slate-400">$</span><input type="number" className="w-full pl-5 p-2 border rounded" value={newLiability.currentBal} onChange={e=>setNewLiability({...newLiability, currentBal:e.target.value})} /></div></div>
-                   <div className="grid grid-cols-2 gap-2">
-                      <div><label className="text-[10px] uppercase text-slate-500">Due Day (1-31)</label><input type="number" min="1" max="31" className="w-full p-2 border rounded" value={newLiability.dueDay} onChange={e=>setNewLiability({...newLiability, dueDay:e.target.value})}/></div>
-                      <div><label className="text-[10px] uppercase text-slate-500">Monthly Pay</label><input type="number" className="w-full p-2 border rounded" value={newLiability.minPayment} onChange={e=>setNewLiability({...newLiability, minPayment:e.target.value})}/></div>
-                   </div>
-                </>
-             )}
-             <div className="grid grid-cols-2 gap-2">
-                 <div><label className="text-[10px] uppercase text-slate-500">Min Payment</label><input type="number" className="w-full p-2 border rounded" value={newLiability.minPayment} onChange={e=>setNewLiability({...newLiability, minPayment:e.target.value})}/></div>
-                 <div><label className="text-[10px] uppercase text-slate-500">APR %</label><input type="number" className="w-full p-2 border rounded" value={newLiability.apr} onChange={e=>setNewLiability({...newLiability, apr:e.target.value})}/></div>
-             </div>
-             <Button onClick={handleAddLiability} className="w-full">Save Liability</Button>
-          </div>
-       </Card>
-       
-       <div className="space-y-4">
-          <div className="border rounded-xl bg-white overflow-hidden">
-             <button onClick={()=>setCollapsedSections(p=>({...p, revolving:!p.revolving}))} className="w-full flex justify-between p-4 bg-purple-50 font-bold text-purple-800">Revolving Credit {collapsedSections.revolving?<ChevronDown/>:<ChevronUp/>}</button>
-             {!collapsedSections.revolving && <div className="p-4 space-y-3">
-                 {liabilities.filter(l=>l.type==='revolving').map(l => (
-                    <Card key={l.id} className="p-4 border-l-4 border-l-purple-400">
-                       <div className="flex justify-between items-start">
-                          <div><h4 className="font-bold text-slate-800">{l.name}</h4><div className="text-xs text-slate-500">Close: {l.closingDay} | Due: {l.dueDay}</div></div>
-                          <div className="text-right"><div className="text-xl font-bold">${l.currentBal}</div><div className="text-xs text-slate-500">Min: ${l.minPayment}</div></div>
-                       </div>
-                       <div className="mt-3 flex justify-end gap-2"><Button onClick={()=>openChargeModal(l)} variant="secondary" className="text-xs px-2 py-1"><Plus size={12}/> Charge</Button><button onClick={()=>deleteItem('liabilities', l.id)} className="text-red-400"><Trash2 size={16}/></button></div>
-                    </Card>
-                 ))}
-             </div>}
-          </div>
-          <div className="border rounded-xl bg-white overflow-hidden">
-             <button onClick={()=>setCollapsedSections(p=>({...p, installment:!p.installment}))} className="w-full flex justify-between p-4 bg-blue-50 font-bold text-blue-800">Installment Loans {collapsedSections.installment?<ChevronDown/>:<ChevronUp/>}</button>
-             {!collapsedSections.installment && <div className="p-4 space-y-3">
-                 {liabilities.filter(l=>l.type==='installment').map(l => (
-                    <Card key={l.id} className="p-4 border-l-4 border-l-blue-400">
-                       <div className="flex justify-between items-start">
-                          <div><h4 className="font-bold text-slate-800">{l.name}</h4><div className="text-xs text-slate-500">Due Day: {l.dueDay}</div></div>
-                          <div className="text-right"><div className="text-xl font-bold">${l.currentBal}</div><div className="text-xs text-slate-500">Monthly: ${l.minPayment}</div></div>
-                       </div>
-                       <div className="mt-3 flex justify-end gap-2"><button onClick={()=>deleteItem('liabilities', l.id)} className="text-red-400"><Trash2 size={16}/></button></div>
-                    </Card>
-                 ))}
-             </div>}
-          </div>
-       </div>
-    </div>
+  const renderProfile = () => (
+     <div className="max-w-md mx-auto space-y-6 animate-in fade-in">
+        <div className="text-center">
+           <div className="bg-blue-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4 text-blue-600">
+              <User size={40} />
+           </div>
+           <h2 className="text-2xl font-bold text-slate-800">User Profile</h2>
+           <p className="text-slate-500 mt-2">Managing Budget: <span className="font-mono bg-slate-100 px-2 py-1 rounded text-slate-800">{budgetId}</span></p>
+        </div>
+        <Card className="p-6 space-y-4">
+           <div>
+              <label className="text-xs font-semibold text-slate-500 uppercase">Display Name</label>
+              <div className="flex gap-2">
+                 {isEditingProfile ? (
+                    <form onSubmit={handleUpdateProfileName} className="flex-1 flex gap-2">
+                      <input className="flex-1 p-2 border rounded text-sm" value={tempName} onChange={e => setTempName(e.target.value)} placeholder="Your Name" />
+                      <Button type="submit" className="text-xs">Save</Button>
+                      <Button variant="ghost" onClick={() => setIsEditingProfile(false)} className="text-xs">Cancel</Button>
+                    </form>
+                 ) : (
+                    <div className="flex-1 p-3 bg-slate-50 rounded border border-slate-200 text-sm font-medium text-slate-800 flex justify-between items-center">
+                      {displayName || 'Budget Owner'}
+                      <button onClick={() => { setTempName(displayName || ''); setIsEditingProfile(true); }} className="text-slate-400 hover:text-blue-600"><Edit2 size={14} /></button>
+                    </div>
+                 )}
+              </div>
+           </div>
+           <div>
+              <label className="text-xs font-semibold text-slate-500 uppercase">Data Debugger</label>
+              <div className="p-3 bg-slate-50 rounded border border-slate-200 text-xs text-slate-600 space-y-1">
+                 <div className="flex items-center gap-2"><Database size={12} /> Cloud Items Found: <span className="font-bold">{debugStats.loaded}</span></div>
+                 <div className="flex items-center gap-2 text-green-600"><CheckCircle size={12} /> Matching Your ID: <span className="font-bold">{debugStats.matched}</span></div>
+                 <p className="pt-2 text-slate-400 italic">If 'Matched' is 0, check your Budget ID for typos/spaces.</p>
+              </div>
+           </div>
+           <div>
+              <label className="text-xs font-semibold text-slate-500 uppercase">Device Sync</label>
+              <div className="flex items-center gap-2 mt-1 text-green-600"><Smartphone size={16} /><span className="text-sm font-medium">Portable</span></div>
+              <p className="text-xs text-slate-400 mt-1">Data is stored in public cloud securely tagged with your ID.</p>
+           </div>
+           <div className="pt-4 border-t border-slate-100">
+             <Button onClick={handleLogout} variant="danger" className="w-full"><LogOut size={16} /> Logout / Switch Budget</Button>
+           </div>
+        </Card>
+     </div>
   );
-
-  // ... (Keep existing renderParser, renderExpenses, renderProfile, chargeModal as previously defined, just ensuring they use the icons) ...
-  // For brevity in this fix, I am assuming the other tabs remain largely the same as the previous correct version, 
-  // just ensuring the icons are all imported at the top.
 
   if (loading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="animate-spin text-blue-600" /></div>;
   if (!user) return (
