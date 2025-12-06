@@ -40,9 +40,7 @@ import {
   List,
   Camera,
   Image as ImageIcon,
-  Landmark,
-  CalendarDays,
-  Banknote
+  Landmark
 } from 'lucide-react';
 import { initializeApp } from "firebase/app";
 import { 
@@ -168,8 +166,8 @@ export default function SmartBudgetApp() {
   const [historicalPaychecks, setHistoricalPaychecks] = useState([]);
   const [budgetConfig, setBudgetConfig] = useState({ 
     startDate: new Date().toISOString().split('T')[0], 
-    frequency: 'bi-weekly'
-    // payDate logic is now derived relative to start date or can be explicitly set if different
+    frequency: 'bi-weekly', 
+    payDate: '' 
   });
   
   // AI State
@@ -187,8 +185,8 @@ export default function SmartBudgetApp() {
     source: '', 
     gross: '', 
     net: '', 
-    date: '', // Will be auto-filled
-    payPeriod: '', // Will be auto-filled
+    date: '', 
+    payPeriod: '', 
     isOneTime: false
   });
   const [isAutoCalc, setIsAutoCalc] = useState(true);
@@ -295,6 +293,48 @@ export default function SmartBudgetApp() {
     setIncomes([]); setBills([]); setLiabilities([]); setExpenses([]);
   };
 
+  const handleUpdateProfileName = async (e) => {
+    e.preventDefault();
+    if (!tempName.trim()) return;
+    try {
+      await updateProfile(user, { displayName: tempName });
+      setDisplayName(tempName);
+      setIsEditingProfile(false);
+    } catch (e) { console.error("Error saving profile", e); }
+  };
+
+  const handleSaveBudgetConfig = async () => {
+    if (!user) return;
+    try {
+      await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'budget_config'), { 
+        ...budgetConfig 
+      });
+      alert("Budget cycle settings saved!");
+    } catch (e) { 
+        alert("Error saving config"); 
+    }
+  };
+
+  // --- Data Ops ---
+  const addItem = async (collectionName, item) => {
+    if (!user) throw new Error("User not authenticated");
+    await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, collectionName), { 
+        ...item, 
+        paid: false, 
+        createdAt: new Date().toISOString() 
+    });
+  };
+
+  const updateItem = async (collectionName, id, updates) => {
+    if (!user) return;
+    await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, collectionName, id), updates);
+  };
+
+  const deleteItem = async (collectionName, id) => {
+    if (!user) return;
+    await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, collectionName, id));
+  };
+
   // --- Logic & Calculations ---
   const deductionStats = useMemo(() => {
     if (historicalPaychecks.length === 0) return { rate: 0, label: '0%' };
@@ -304,11 +344,30 @@ export default function SmartBudgetApp() {
     return { rate, label: `${(rate * 100).toFixed(1)}%` };
   }, [historicalPaychecks]);
 
+  // --- Helper for Date Display without Timezone Shift ---
+  const formatLocalDate = (dateObj) => {
+    const y = dateObj.getFullYear();
+    const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+    const d = String(dateObj.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  };
+
   // --- Intelligent Pay Cycle Logic ---
   const calculatedCycle = useMemo(() => {
-    const start = new Date(budgetConfig.startDate);
+    // Force local date parsing
+    const parts = budgetConfig.startDate.split('-');
+    // new Date(year, monthIndex, day) creates a local date at 00:00:00
+    const start = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+    
     const today = new Date();
-    const freqDays = { 'weekly': 7, 'bi-weekly': 14, 'semi-monthly': 15, 'monthly': 30 }[budgetConfig.frequency] || 14;
+    today.setHours(0,0,0,0);
+    
+    const freqDays = { 
+        'weekly': 7, 
+        'bi-weekly': 14, 
+        'semi-monthly': 15, 
+        'monthly': 30 
+    }[budgetConfig.frequency] || 14;
 
     const diffTime = today.getTime() - start.getTime();
     const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
@@ -317,12 +376,10 @@ export default function SmartBudgetApp() {
     const cyclesPassed = Math.floor(diffDays / freqDays);
     
     // Current cycle start is StartDate + (CyclesPassed * Frequency)
-    // If today is exactly on a start day, diffDays % freqDays === 0
-    
     let currentStart = new Date(start);
     currentStart.setDate(start.getDate() + (cyclesPassed * freqDays));
     
-    // If calculated start is in future (shouldn't happen with floor, but safety)
+    // If calculated start is in future (rare edge case), pull back
     if (currentStart > today) {
        currentStart.setDate(currentStart.getDate() - freqDays);
     }
@@ -330,11 +387,8 @@ export default function SmartBudgetApp() {
     const currentEnd = new Date(currentStart);
     currentEnd.setDate(currentStart.getDate() + freqDays - 1);
     
-    // Predict Pay Date: Assuming Pay Date is usually the last Friday or specific day of the cycle.
-    // For simplicity in this logic, we assume Pay Date is the last day of the period or user specific offset.
-    // If user previously set a payDate, we find the offset from startDate and apply it.
-    // Simplified: Pay Date is often the Friday of that week. Let's just default to End Date for now unless offset known.
-    const predictedPayDate = new Date(currentEnd); 
+    // Default pay date logic (e.g. user set custom date or we infer end of cycle)
+    const predictedPayDate = budgetConfig.payDate ? new Date(budgetConfig.payDate) : new Date(currentEnd); 
 
     return { 
         start: currentStart, 
@@ -346,12 +400,17 @@ export default function SmartBudgetApp() {
   // Auto-fill income form effect
   useEffect(() => {
     if (activeTab === 'income' && !newIncome.isOneTime && !newIncome.date) {
-        // Format dates for inputs
-        const pStart = calculatedCycle.start.toISOString().split('T')[0];
-        const pEnd = calculatedCycle.end.toISOString().split('T')[0];
-        // Usually you get paid AFTER the period ends, or ON the last day. 
-        // Let's suggest the Pay Date as the income date.
-        const pDate = calculatedCycle.end.toISOString().split('T')[0];
+        // Use local format function to prevent off-by-one errors
+        const pStart = formatLocalDate(calculatedCycle.start);
+        const pEnd = formatLocalDate(calculatedCycle.end);
+        
+        // Suggest Pay Date if set, otherwise cycle end
+        let pDate = pEnd;
+        if (budgetConfig.payDate) {
+             // Logic to find next pay date occurrence could go here, 
+             // but keeping it simple to cycle end for now to avoid complexity
+             pDate = pEnd;
+        }
         
         setNewIncome(prev => ({
             ...prev,
@@ -359,7 +418,7 @@ export default function SmartBudgetApp() {
             payPeriod: `${pStart} to ${pEnd}`
         }));
     }
-  }, [activeTab, calculatedCycle, newIncome.isOneTime]);
+  }, [activeTab, calculatedCycle, newIncome.isOneTime, budgetConfig.payDate]);
 
 
   const totalIncome = incomes.reduce((acc, curr) => acc + Number(curr.amount), 0);
@@ -384,28 +443,44 @@ export default function SmartBudgetApp() {
     let overdue = [], current = [], future = [];
     
     const categorize = (item, dueDate, isPaid) => {
-      const d = new Date(dueDate); d.setHours(0,0,0,0);
-      const itemWithDate = { ...item, dueDateDisplay: d.toISOString().split('T')[0] };
+      // Parse YYYY-MM-DD explicitly to avoid UTC shift
+      const parts = dueDate.split('-');
+      const d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+      
+      const itemWithDate = { ...item, dueDateDisplay: dueDate }; // Use string directly
+      
       if (d < start && !isPaid) overdue.push(itemWithDate);
       else if (d >= start && d <= end) current.push(itemWithDate);
       else if (d > end) future.push(itemWithDate);
     };
 
-    bills.forEach(b => { if (b.date) categorize({ ...b, type: 'bill' }, b.date, b.paid); });
+    bills.forEach(b => { 
+        if (b.date) categorize({ ...b, type: 'bill' }, b.date, b.paid); 
+    });
+
     liabilities.forEach(l => {
       let d = l.dueDay ? getNextOccurrence(l.dueDay) : (l.dueDate ? new Date(l.dueDate) : null);
       if (d) {
         let isPaidForCycle = false;
-        if (l.lastPaymentDate) { const pd = new Date(l.lastPaymentDate); if (pd >= start && pd <= end) isPaidForCycle = true; }
-        categorize({ ...l, type: 'liability', amount: l.minPayment, paid: isPaidForCycle }, d, isPaidForCycle);
+        if (l.lastPaymentDate) { 
+            const pd = new Date(l.lastPaymentDate); 
+            // Simple check if payment date falls inside current cycle window
+            if (pd >= start && pd <= end) isPaidForCycle = true; 
+        }
+        const dStr = formatLocalDate(d);
+        categorize({ ...l, type: 'liability', amount: l.minPayment, paid: isPaidForCycle }, dStr, isPaidForCycle);
       }
     });
+
     const sorter = (a, b) => new Date(a.dueDateDisplay) - new Date(b.dueDateDisplay);
-    return { overdue: overdue.sort(sorter), current: current.sort(sorter), future: future.sort(sorter) };
+    return { 
+        overdue: overdue.sort(sorter), 
+        current: current.sort(sorter), 
+        future: future.sort(sorter) 
+    };
   }, [bills, liabilities, calculatedCycle]);
 
   // --- Handlers ---
-  const handleSaveBudgetConfig = async () => { if (!user) return; await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'budget_config'), { ...budgetConfig }); alert("Cycle Updated!"); };
   
   const handleAddHistorical = (e) => { 
     e.preventDefault(); 
@@ -451,7 +526,6 @@ export default function SmartBudgetApp() {
     setNewLiability({ name: '', type: 'revolving', statementBal: '', currentBal: '', minPayment: '', apr: '', closingDay: '', dueDay: '' }); 
   };
 
-  // ... (Other handlers kept same: ImageUpload, AddExpense, Parsers, Toggles, AI) ...
   const handleImageUpload = async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -468,6 +542,7 @@ export default function SmartBudgetApp() {
     };
     reader.readAsDataURL(file);
   };
+
   const handleAddExpense = async () => {
     if (!newExpense.name || !newExpense.amount) return;
     try {
@@ -482,19 +557,79 @@ export default function SmartBudgetApp() {
       setNewExpense({ name: '', amount: '', date: new Date().toISOString().split('T')[0], paymentMethod: 'bank', category: 'Food' });
     } catch (e) { alert("Error: " + e.message); }
   };
-  const addItem = async (col, item) => { if (!user) throw new Error("Auth required"); await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, col), { ...item, paid: false, createdAt: new Date().toISOString() }); };
-  const updateItem = async (col, id, updates) => { if (!user) return; await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, col, id), updates); };
-  const deleteItem = async (col, id) => { if (!user) return; await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, col, id)); };
-  const handleAddManualBill = async () => { if(!manualBill.name) return; await addItem('bills', {...manualBill, amount: parseFloat(manualBill.amount)}); setManualBill({...manualBill, name:'', amount:''}); };
-  const handleAiParse = async () => { if (!parseText) return; setAiParseLoading(true); try { const res = await callGemini(`Extract bill to JSON: {name, amount, date, category}. Text: ${parseText}`); setParsedResult(JSON.parse(res.replace(/```json/g,'').replace(/```/g,'').trim())); } catch(e){ alert("AI failed"); } finally { setAiParseLoading(false); } };
-  const confirmParsedBill = async () => { if(!parsedResult) return; await addItem('bills', {...parsedResult, amount: parseFloat(parsedResult.amount)}); setParsedResult(null); setActiveTab('bills'); };
-  const toggleBillPaid = async (b) => updateItem('bills', b.id, { paid: !b.paid });
-  const toggleLiabilityPaid = async (l) => { const now = new Date().toISOString(); const {start, end} = calculatedCycle; let isPaid = l.lastPaymentDate && new Date(l.lastPaymentDate) >= start && new Date(l.lastPaymentDate) <= end; updateItem('liabilities', l.id, { lastPaymentDate: isPaid ? null : now }); };
-  const generateAiAdvice = async () => { setAiLoading(true); try { const res = await callGemini(`Budget Advice. Income: ${totalIncome}, Expenses: ${totalExpenses}, Debt: ${totalDebt}. 3 bullet points.`); setAiAdvice(res); } catch(e){ setAiAdvice("AI unavailable."); } finally { setAiLoading(false); } };
-  const handleConfirmCharge = async () => { if(!selectedLiability || !newCharge.amount) return; const newBal = parseFloat(selectedLiability.currentBal) + parseFloat(newCharge.amount); await updateItem('liabilities', selectedLiability.id, { currentBal: newBal }); setChargeModalOpen(false); };
-  const handleCloseStatement = async (l) => { const interest = (l.currentBal * (l.apr/100))/12; const newBal = parseFloat(l.currentBal) + interest; if(window.confirm(`Add Interest $${interest.toFixed(2)}?`)) updateItem('liabilities', l.id, { currentBal: newBal, statementBal: newBal }); };
 
-  // --- Renderers ---
+  const handleAddManualBill = async () => { 
+    if (!manualBill.name || !manualBill.amount) return; 
+    await addItem('bills', { ...manualBill, amount: parseFloat(manualBill.amount) }); 
+    setManualBill({ name: '', amount: '', date: new Date().toISOString().split('T')[0], category: 'Uncategorized', recurring: false }); 
+    alert("Bill added"); 
+  };
+
+  const handleAiParse = async () => { 
+    if (!parseText) return; 
+    setAiParseLoading(true); 
+    const prompt = `Extract transaction details from text to JSON: { "name": "string", "amount": number, "date": "YYYY-MM-DD", "category": "string", "recurring": boolean }. Text: "${parseText}"`; 
+    try { 
+      const jsonStr = await callGemini(prompt); 
+      const result = JSON.parse(jsonStr.replace(/```json/g, '').replace(/```/g, '').trim()); 
+      setParsedResult(result); 
+    } catch (e) { 
+        alert("AI Parsing failed."); 
+    } finally { 
+        setAiParseLoading(false); 
+    } 
+  };
+
+  const confirmParsedBill = async () => { 
+    if (!parsedResult) return; 
+    await addItem('bills', { ...parsedResult, amount: parseFloat(parsedResult.amount) }); 
+    setParsedResult(null); 
+    setParseText(''); 
+    setEntryMode('manual'); 
+    setActiveTab('bills'); 
+  };
+
+  const toggleBillPaid = async (b) => updateItem('bills', b.id, { paid: !b.paid });
+
+  const toggleLiabilityPaid = async (l) => { 
+    const now = new Date().toISOString(); 
+    const { start, end } = calculatedCycle; 
+    let isPaid = l.lastPaymentDate && new Date(l.lastPaymentDate) >= start && new Date(l.lastPaymentDate) <= end; 
+    updateItem('liabilities', l.id, { lastPaymentDate: isPaid ? null : now }); 
+  };
+
+  const generateAiAdvice = async () => { 
+    setAiLoading(true); 
+    const prompt = `Financial Advisor check. Income: $${totalIncome}, Fixed Expenses: $${totalExpenses}, Debt: $${totalDebt}. Give 3 bullet points advice.`; 
+    try { 
+      const advice = await callGemini(prompt); 
+      setAiAdvice(advice); 
+    } catch (e) { 
+        setAiAdvice("AI unavailable."); 
+    } finally { 
+        setAiLoading(false); 
+    } 
+  };
+
+  const handleConfirmCharge = async () => { 
+    if(!selectedLiability || !newCharge.amount) return; 
+    const newBal = parseFloat(selectedLiability.currentBal) + parseFloat(newCharge.amount); 
+    await updateItem('liabilities', selectedLiability.id, { currentBal: newBal }); 
+    setChargeModalOpen(false); 
+  };
+
+  const handleCloseStatement = async (l) => { 
+    const interest = (l.currentBal * (l.apr/100))/12; 
+    const newBal = parseFloat(l.currentBal) + interest; 
+    if(window.confirm(`Add Interest $${interest.toFixed(2)}?`)) 
+        updateItem('liabilities', l.id, { currentBal: newBal, statementBal: newBal }); 
+  };
+
+  // --- Helper Components ---
+  const InfoIcon = ({size}) => <AlertCircle size={size} />;
+
+  // --- Render Functions ---
+
   const renderDashboard = () => (
     <div className="space-y-6 animate-in fade-in">
       <Card className="p-6 border-l-4 border-l-purple-500 bg-purple-50">
@@ -508,7 +643,7 @@ export default function SmartBudgetApp() {
       <Card className="p-6 bg-slate-800 text-white">
         <div className="flex justify-between items-center mb-4">
            <div className="flex gap-2"><Clock className="text-yellow-400"/><h3 className="font-bold">Obligations</h3></div>
-           <div className="text-xs bg-slate-700 px-2 py-1 rounded">{calculatedCycle.start.toLocaleDateString()} - {calculatedCycle.end.toLocaleDateString()}</div>
+           <div className="text-xs bg-slate-700 px-2 py-1 rounded">{formatLocalDate(calculatedCycle.start)} - {formatLocalDate(calculatedCycle.end)}</div>
         </div>
         <div className="space-y-2">
            {categorizedObligations.overdue.map((i,x) => <div key={x} className="flex justify-between items-center py-1 border-b border-red-800/50"><span className="text-sm text-red-300">{i.name}</span><div className="flex gap-2"><span className="font-bold text-red-400">${i.amount}</span><button onClick={()=>i.type==='bill'?toggleBillPaid(i):toggleLiabilityPaid(i)}><Square size={16} className="text-red-400"/></button></div></div>)}
@@ -522,6 +657,34 @@ export default function SmartBudgetApp() {
          <Card className="p-4"><p className="text-xs font-bold text-slate-500">INCOME</p><h3 className="text-xl font-bold text-green-600">${totalIncome.toLocaleString()}</h3></Card>
          <Card className="p-4"><p className="text-xs font-bold text-slate-500">REMAINING</p><h3 className={`text-xl font-bold ${remaining>=0?'text-blue-600':'text-orange-600'}`}>${remaining.toLocaleString()}</h3></Card>
       </div>
+
+      {/* Restored: Recent Bills & Expenses */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <Card className="p-6">
+           <h4 className="font-bold mb-4 flex items-center gap-2 text-slate-700"><Receipt size={18}/> Recent Bills</h4>
+           <div className="space-y-2">
+             {bills.slice(0,3).map(b => (
+               <div key={b.id} className="flex justify-between text-sm p-2 bg-slate-50 rounded">
+                 <span>{b.name}</span>
+                 <span className="font-bold">${b.amount}</span>
+               </div>
+             ))}
+             {bills.length === 0 && <p className="text-xs text-slate-400 italic">No bills yet.</p>}
+           </div>
+        </Card>
+        <Card className="p-6">
+           <h4 className="font-bold mb-4 flex items-center gap-2 text-slate-700"><DollarSign size={18}/> Recent Expenses</h4>
+           <div className="space-y-2">
+             {expenses.slice(0,3).map(e => (
+               <div key={e.id} className="flex justify-between text-sm p-2 bg-slate-50 rounded">
+                 <span>{e.name}</span>
+                 <span className="font-bold">${e.amount}</span>
+               </div>
+             ))}
+             {expenses.length === 0 && <p className="text-xs text-slate-400 italic">No expenses yet.</p>}
+           </div>
+        </Card>
+      </div>
     </div>
   );
 
@@ -531,9 +694,13 @@ export default function SmartBudgetApp() {
           <h3 className="font-bold text-slate-800 flex items-center gap-2 mb-4"><Settings size={18}/> Master Budget Schedule</h3>
           <div className="grid grid-cols-2 gap-4">
              <div><label className="text-xs font-bold text-blue-800 uppercase">Cycle Start</label><input type="date" value={budgetConfig.startDate} onChange={e=>setBudgetConfig({...budgetConfig, startDate:e.target.value})} className="w-full p-2 border rounded"/></div>
+             <div>
+                <label className="text-xs font-bold text-blue-800 uppercase">Pay Date (Effective)</label>
+                <input type="date" value={budgetConfig.payDate} onChange={e=>setBudgetConfig({...budgetConfig, payDate:e.target.value})} className="w-full p-2 border rounded"/>
+             </div>
              <div><label className="text-xs font-bold text-blue-800 uppercase">Frequency</label><select value={budgetConfig.frequency} onChange={e=>setBudgetConfig({...budgetConfig, frequency:e.target.value})} className="w-full p-2 border rounded"><option value="weekly">Weekly</option><option value="bi-weekly">Bi-Weekly</option><option value="monthly">Monthly</option></select></div>
           </div>
-          <p className="text-xs text-blue-600 mt-2">Current Cycle: <b>{calculatedCycle.start.toLocaleDateString()}</b> to <b>{calculatedCycle.end.toLocaleDateString()}</b></p>
+          <p className="text-xs text-blue-600 mt-2">Current Cycle: <b>{formatLocalDate(calculatedCycle.start)}</b> to <b>{formatLocalDate(calculatedCycle.end)}</b></p>
           <Button onClick={handleSaveBudgetConfig} className="w-full mt-3 text-xs">Update Schedule</Button>
        </Card>
 
@@ -663,10 +830,9 @@ export default function SmartBudgetApp() {
          {activeTab === 'dashboard' && renderDashboard()}
          {activeTab === 'income' && renderIncome()}
          {activeTab === 'liabilities' && renderLiabilities()}
-         {/* ... render other tabs ... */}
-         {activeTab === 'bills' && <div className="text-center text-slate-500 py-10">Bills Module (Placeholder)</div>}
-         {activeTab === 'expenses' && <div className="text-center text-slate-500 py-10">Expenses Module (Placeholder)</div>}
-         {activeTab === 'profile' && <div className="text-center"><Button onClick={handleLogout} variant="danger">Logout</Button></div>}
+         {activeTab === 'bills' && renderParser()}
+         {activeTab === 'expenses' && renderExpenses()}
+         {activeTab === 'profile' && renderProfile()}
       </main>
 
       {/* Bottom Nav */}
