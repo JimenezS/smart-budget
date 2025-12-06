@@ -40,7 +40,9 @@ import {
   List,
   Camera,
   Image as ImageIcon,
-  Landmark
+  Landmark,
+  CalendarDays,
+  Banknote
 } from 'lucide-react';
 import { initializeApp } from "firebase/app";
 import { 
@@ -56,9 +58,8 @@ import {
 import { getFirestore, collection, addDoc, deleteDoc, onSnapshot, doc, setDoc, updateDoc, getDoc } from "firebase/firestore";
 
 // --- Firebase Initialization ---
-const firebaseConfig = typeof __firebase_config !== 'undefined' 
-  ? JSON.parse(__firebase_config) 
-  : {
+// Your specific configuration is now hardcoded as requested
+const firebaseConfig = {
   apiKey: "AIzaSyAoODPsPJagi0w9tqn9JL-pTL4BHCyrr38",
   authDomain: "smartbudgeting-44933.firebaseapp.com",
   projectId: "smartbudgeting-44933",
@@ -75,8 +76,11 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
 // --- API Helper ---
 const callGemini = async (prompt, imageBase64 = null) => {
-  // NOTE: For local deployment, change this to: import.meta.env.VITE_GEMINI_KEY
-  const apiKey = import.meta.env.VITE_GEMINI_KEY; 
+  // *** DEPLOYMENT STEP: UNCOMMENT THE LINE BELOW IN VS CODE ***
+  const apiKey = import.meta.env.VITE_GEMINI_KEY;
+  
+  // Keep this empty string for the preview to load without errors
+ // const apiKey = ""; 
   
   try {
     const parts = [{ text: prompt }];
@@ -142,6 +146,7 @@ const Button = ({ children, onClick, variant = "primary", className = "", disabl
 export default function SmartBudgetApp() {
   // --- State ---
   const [user, setUser] = useState(null); 
+  const [budgetId, setBudgetId] = useState(''); 
   const [activeTab, setActiveTab] = useState('dashboard');
   const [loading, setLoading] = useState(true);
   
@@ -164,7 +169,7 @@ export default function SmartBudgetApp() {
   const [expenses, setExpenses] = useState([]); 
   const [historicalPaychecks, setHistoricalPaychecks] = useState([]);
   
-  // Default budget config with safe defaults
+  // Budget Config State
   const [budgetConfig, setBudgetConfig] = useState({ 
     startDate: new Date().toISOString().split('T')[0], 
     frequency: 'bi-weekly', 
@@ -366,14 +371,9 @@ export default function SmartBudgetApp() {
 
   // --- Intelligent Pay Cycle Logic ---
   const calculatedCycle = useMemo(() => {
-    // Safety check for missing start date
     if (!budgetConfig.startDate) return { start: new Date(), end: new Date(), payDate: new Date() };
 
-    // Force local date parsing
     const parts = budgetConfig.startDate.split('-');
-    if (parts.length !== 3) return { start: new Date(), end: new Date(), payDate: new Date() };
-
-    // new Date(year, monthIndex, day) creates a local date at 00:00:00
     const start = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
     
     const today = new Date();
@@ -388,16 +388,11 @@ export default function SmartBudgetApp() {
 
     const diffTime = today.getTime() - start.getTime();
     const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
-    
-    // Calculate how many full cycles have passed
-    // If diffDays is negative (future start date), cyclesPassed will be negative, which is fine
     const cyclesPassed = Math.floor(diffDays / freqDays);
     
-    // Current cycle start is StartDate + (CyclesPassed * Frequency)
     let currentStart = new Date(start);
     currentStart.setDate(start.getDate() + (cyclesPassed * freqDays));
     
-    // If calculated start is in future (rare edge case with floor/ceil), pull back
     if (currentStart > today) {
        currentStart.setDate(currentStart.getDate() - freqDays);
     }
@@ -405,7 +400,16 @@ export default function SmartBudgetApp() {
     const currentEnd = new Date(currentStart);
     currentEnd.setDate(currentStart.getDate() + freqDays - 1);
     
-    const predictedPayDate = budgetConfig.payDate ? new Date(budgetConfig.payDate) : new Date(currentEnd); 
+    // Default pay date logic
+    let predictedPayDate = new Date(currentEnd);
+    if (budgetConfig.payDate) {
+        const pParts = budgetConfig.payDate.split('-');
+        const pAnchor = new Date(parseInt(pParts[0]), parseInt(pParts[1]) - 1, parseInt(pParts[2]));
+        const pDiff = today.getTime() - pAnchor.getTime();
+        const pCycles = Math.floor(Math.floor(pDiff / (1000 * 60 * 60 * 24)) / freqDays);
+        predictedPayDate = new Date(pAnchor);
+        predictedPayDate.setDate(pAnchor.getDate() + ((pCycles + 1) * freqDays));
+    }
 
     return { 
         start: currentStart, 
@@ -417,16 +421,9 @@ export default function SmartBudgetApp() {
   // Auto-fill income form effect
   useEffect(() => {
     if (activeTab === 'income' && !newIncome.isOneTime && !newIncome.date) {
-        // Use local format function to prevent off-by-one errors
         const pStart = formatLocalDate(calculatedCycle.start);
         const pEnd = formatLocalDate(calculatedCycle.end);
-        
-        let pDate = pEnd;
-        if (budgetConfig.payDate) {
-             // Logic to find next pay date occurrence could go here
-             // For now defaulting to cycle end date as sensible default
-             pDate = pEnd;
-        }
+        const pDate = formatLocalDate(calculatedCycle.payDate);
         
         setNewIncome(prev => ({
             ...prev,
@@ -459,11 +456,9 @@ export default function SmartBudgetApp() {
     let overdue = [], current = [], future = [];
     
     const categorize = (item, dueDate, isPaid) => {
-      // Parse YYYY-MM-DD explicitly to avoid UTC shift
       const parts = dueDate.split('-');
       const d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
-      
-      const itemWithDate = { ...item, dueDateDisplay: dueDate }; // Use string directly
+      const itemWithDate = { ...item, dueDateDisplay: dueDate };
       
       if (d < start && !isPaid) overdue.push(itemWithDate);
       else if (d >= start && d <= end) current.push(itemWithDate);
@@ -480,7 +475,6 @@ export default function SmartBudgetApp() {
         let isPaidForCycle = false;
         if (l.lastPaymentDate) { 
             const pd = new Date(l.lastPaymentDate); 
-            // Simple check if payment date falls inside current cycle window
             if (pd >= start && pd <= end) isPaidForCycle = true; 
         }
         const dStr = formatLocalDate(d);
@@ -526,7 +520,7 @@ export default function SmartBudgetApp() {
         payPeriod: newIncome.isOneTime ? 'One-Time' : newIncome.payPeriod, 
         type: newIncome.isOneTime ? 'bonus' : 'salary' 
     }); 
-    setNewIncome(prev => ({ ...prev, source: '', gross: '', net: '' })); // Keep date/period for convenience
+    setNewIncome(prev => ({ ...prev, source: '', gross: '', net: '' })); 
   };
 
   const handleAddLiability = async () => { 
@@ -910,6 +904,28 @@ export default function SmartBudgetApp() {
                <input placeholder="Name" value={newLiability.name} onChange={e => setNewLiability({...newLiability, name: e.target.value})} className="w-full p-2 border rounded"/>
                <input type="number" placeholder="Current Balance" value={newLiability.currentBal} onChange={e => setNewLiability({...newLiability, currentBal: e.target.value})} className="w-full p-2 border rounded"/>
                <input type="number" placeholder="Min Payment" value={newLiability.minPayment} onChange={e => setNewLiability({...newLiability, minPayment: e.target.value})} className="w-full p-2 border rounded"/>
+               
+               {/* CONDITIONAL RENDERING FOR REVOLVING VS INSTALLMENT */}
+               {newLiability.type === 'revolving' && (
+                 <>
+                    <div className="grid grid-cols-2 gap-2">
+                        <input type="number" placeholder="Statement Bal" className="w-full p-2 border rounded" value={newLiability.statementBal} onChange={e=>setNewLiability({...newLiability, statementBal:e.target.value})}/>
+                        <input type="number" placeholder="APR %" className="w-full p-2 border rounded" value={newLiability.apr} onChange={e=>setNewLiability({...newLiability, apr:e.target.value})}/>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                        <input type="number" placeholder="Closing Day (1-31)" className="w-full p-2 border rounded" value={newLiability.closingDay} onChange={e=>setNewLiability({...newLiability, closingDay:e.target.value})}/>
+                        <input type="number" placeholder="Due Day (1-31)" className="w-full p-2 border rounded" value={newLiability.dueDay} onChange={e=>setNewLiability({...newLiability, dueDay:e.target.value})}/>
+                    </div>
+                 </>
+               )}
+               
+               {newLiability.type === 'installment' && (
+                 <div className="grid grid-cols-2 gap-2">
+                    <input type="number" placeholder="APR %" className="w-full p-2 border rounded" value={newLiability.apr} onChange={e=>setNewLiability({...newLiability, apr:e.target.value})}/>
+                    <input type="number" placeholder="Due Day (1-31)" className="w-full p-2 border rounded" value={newLiability.dueDay} onChange={e=>setNewLiability({...newLiability, dueDay:e.target.value})}/>
+                 </div>
+               )}
+
                <Button onClick={handleAddLiability} className="w-full">Add Liability</Button>
             </div>
           </Card>
