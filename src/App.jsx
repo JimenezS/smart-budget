@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Calculator, 
   Receipt, 
@@ -33,7 +33,14 @@ import {
   CheckSquare,
   Square,
   Mail,
-  Lock
+  Lock,
+  ChevronDown,
+  ChevronUp,
+  Repeat,
+  List,
+  Camera,
+  Image as ImageIcon,
+  Landmark
 } from 'lucide-react';
 import { initializeApp } from "firebase/app";
 import { 
@@ -46,10 +53,9 @@ import {
   signOut,
   onAuthStateChanged
 } from "firebase/auth";
-import { getFirestore, collection, addDoc, deleteDoc, onSnapshot, doc, setDoc, updateDoc } from "firebase/firestore";
+import { getFirestore, collection, addDoc, deleteDoc, onSnapshot, doc, setDoc, updateDoc, getDoc } from "firebase/firestore";
 
 // --- Firebase Initialization ---
-// NOTE: You must replace these values with your actual Firebase config keys
 const firebaseConfig = typeof __firebase_config !== 'undefined' 
   ? JSON.parse(__firebase_config) 
   : {
@@ -60,7 +66,8 @@ const firebaseConfig = typeof __firebase_config !== 'undefined'
   messagingSenderId: "38995285066",
   appId: "1:38995285066:web:540cfa83f44bbca6d202b3",
   measurementId: "G-2SHPJKS224"
-};
+}
+;
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -68,23 +75,34 @@ const db = getFirestore(app);
 const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 
 // --- API Helper ---
-const callGemini = async (prompt) => {
-  // NOTE FOR DEPLOYMENT: 
-  // In your local VS Code project, CHANGE this line to: 
-  // const apiKey = import.meta.env.VITE_GEMINI_KEY;
-  const apiKey = import.meta.env.VITE_GEMINI_KEY ; 
+const callGemini = async (prompt, imageBase64 = null) => {
+  // NOTE: For local deployment, change this to: import.meta.env.VITE_GEMINI_KEY
+  const apiKey = import.meta.env.VITE_GEMINI_KEY; 
   
   try {
+    const parts = [{ text: prompt }];
+    if (imageBase64) {
+      parts.push({
+        inlineData: {
+          mimeType: "image/jpeg",
+          data: imageBase64.split(',')[1] // Remove data:image/jpeg;base64, prefix
+        }
+      });
+    }
+
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
+        body: JSON.stringify({ contents: [{ parts: parts }] }),
       }
     );
     const data = await response.json();
-    return data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!data.candidates || data.candidates.length === 0) {
+        throw new Error("No response from AI. Check API Key.");
+    }
+    return data.candidates[0].content.parts[0].text;
   } catch (error) {
     console.error("Gemini API Error:", error);
     throw error;
@@ -123,29 +141,29 @@ const Button = ({ children, onClick, variant = "primary", className = "", disabl
 };
 
 export default function SmartBudgetApp() {
-  // --- State ---
   const [user, setUser] = useState(null); 
   const [activeTab, setActiveTab] = useState('dashboard');
   const [loading, setLoading] = useState(true);
   
   // Auth UI State
-  const [authMode, setAuthMode] = useState('login'); // 'login' or 'signup'
+  const [authMode, setAuthMode] = useState('login'); 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const [authError, setAuthError] = useState('');
 
-  // Profile Data
-  const [displayName, setDisplayName] = useState('');
-  const [isEditingProfile, setIsEditingProfile] = useState(false);
-  const [tempName, setTempName] = useState('');
+  // UI State
+  const [showFuture, setShowFuture] = useState(false);
+  const [expandedExpenses, setExpandedExpenses] = useState(false);
+  const [collapsedSections, setCollapsedSections] = useState({ revolving: false, installment: false });
   
   // Data State
   const [incomes, setIncomes] = useState([]);
   const [bills, setBills] = useState([]);
   const [liabilities, setLiabilities] = useState([]);
+  const [expenses, setExpenses] = useState([]); 
   const [historicalPaychecks, setHistoricalPaychecks] = useState([]);
-  const [budgetConfig, setBudgetConfig] = useState({ startDate: new Date().toISOString().split('T')[0], frequency: 'bi-weekly' });
+  const [budgetConfig, setBudgetConfig] = useState({ startDate: new Date().toISOString().split('T')[0], frequency: 'bi-weekly', payDate: '' });
   
   // AI State
   const [aiAdvice, setAiAdvice] = useState(null);
@@ -155,217 +173,117 @@ export default function SmartBudgetApp() {
   // Inputs State
   const [parseText, setParseText] = useState('');
   const [parsedResult, setParsedResult] = useState(null);
+  const fileInputRef = useRef(null); 
   
-  // Income Input
-  const [newIncome, setNewIncome] = useState({ 
-    source: '', 
-    gross: '', 
-    net: '', 
-    date: new Date().toISOString().split('T')[0],
-    payPeriod: '' 
-  });
+  // Forms State
+  const [newIncome, setNewIncome] = useState({ source: '', gross: '', net: '', date: new Date().toISOString().split('T')[0], payPeriod: '' });
   const [isAutoCalc, setIsAutoCalc] = useState(true);
-  
-  // Liability Input
-  const [newLiability, setNewLiability] = useState({
-    name: '',
-    type: 'revolving', 
-    statementBal: '',
-    currentBal: '',
-    minPayment: '',
-    apr: '',
-    closingDay: '', 
-    dueDay: ''      
-  });
+  const [newLiability, setNewLiability] = useState({ name: '', type: 'revolving', statementBal: '', currentBal: '', minPayment: '', apr: '', closingDay: '', dueDay: '' });
+  const [manualBill, setManualBill] = useState({ name: '', amount: '', date: new Date().toISOString().split('T')[0], category: 'Uncategorized', recurring: false });
+  const [newExpense, setNewExpense] = useState({ name: '', amount: '', date: new Date().toISOString().split('T')[0], paymentMethod: 'bank', category: 'Food' });
 
-  // Modal State for Charges
+  // Modal State
   const [chargeModalOpen, setChargeModalOpen] = useState(false);
   const [selectedLiability, setSelectedLiability] = useState(null);
   const [newCharge, setNewCharge] = useState({ amount: '', date: new Date().toISOString().split('T')[0], description: '' });
 
-  // --- 1. Authentication Listener ---
-  
+  // --- Auth & Sync ---
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
-      if (u) {
-        setDisplayName(u.displayName || 'Budget Owner');
-      }
       setLoading(false);
     });
     return () => unsubscribe();
   }, []);
 
-  // --- 2. Data Syncing (PRIVATE PATH) ---
-  
   useEffect(() => {
     if (!user) return;
-
-    // Use PRIVATE user path: artifacts/{appId}/users/{uid}/{collection}
     const createListener = (collectionName, setter) => {
       const q = collection(db, 'artifacts', appId, 'users', user.uid, collectionName);
       return onSnapshot(q, (snapshot) => {
         const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-        
-        // Sorting logic
         data.sort((a, b) => {
            if (a.date && b.date) return new Date(b.date) - new Date(a.date);
            return 0;
         });
         setter(data);
-      }, (error) => console.error(`Error syncing ${collectionName}:`, error));
+      });
     };
 
     const unsubIncomes = createListener('incomes', setIncomes);
     const unsubBills = createListener('bills', setBills);
     const unsubLiabilities = createListener('liabilities', setLiabilities);
+    const unsubExpenses = createListener('expenses', setExpenses);
     const unsubHistory = createListener('historicalPaychecks', setHistoricalPaychecks);
 
-    // Fetch Budget Config (Stored as a doc in user's collection)
     const configRef = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'budget_config');
-    onSnapshot(configRef, (doc) => {
-      if (doc.exists()) {
-        setBudgetConfig(doc.data());
-      }
-    });
+    onSnapshot(configRef, (doc) => { if (doc.exists()) setBudgetConfig(doc.data()); });
 
-    return () => {
-      unsubIncomes();
-      unsubBills();
-      unsubLiabilities();
-      unsubHistory();
-    };
+    return () => { unsubIncomes(); unsubBills(); unsubLiabilities(); unsubHistory(); unsubExpenses(); };
   }, [user]);
 
-  // --- Auth Handlers ---
-
+  // --- Handlers ---
   const handleGoogleLogin = async () => {
-    try {
-      const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
-    } catch (error) {
-      setAuthError(error.message);
-    }
+    try { await signInWithPopup(auth, new GoogleAuthProvider()); } catch (error) { setAuthError(error.message); }
   };
 
   const handleEmailAuth = async (e) => {
-    e.preventDefault();
-    setAuthError('');
+    e.preventDefault(); setAuthError('');
     try {
-      if (authMode === 'login') {
-        await signInWithEmailAndPassword(auth, email, password);
-      } else {
+      if (authMode === 'login') await signInWithEmailAndPassword(auth, email, password);
+      else {
         const res = await createUserWithEmailAndPassword(auth, email, password);
         await updateProfile(res.user, { displayName: fullName });
       }
-    } catch (error) {
-      setAuthError(error.message);
-    }
+    } catch (error) { setAuthError(error.message); }
   };
 
   const handleLogout = async () => {
     await signOut(auth);
-    setIncomes([]);
-    setBills([]);
-    setLiabilities([]);
+    setIncomes([]); setBills([]); setLiabilities([]);
   };
-
-  const handleUpdateProfileName = async (e) => {
-    e.preventDefault();
-    if (!tempName.trim()) return;
-    try {
-      await updateProfile(user, { displayName: tempName });
-      setDisplayName(tempName);
-      setIsEditingProfile(false);
-    } catch (e) { console.error("Error saving profile", e); }
-  };
-
-  const handleSaveBudgetConfig = async () => {
-    if (!user) return;
-    try {
-      await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'budget_config'), {
-        ...budgetConfig
-      });
-      alert("Budget cycle settings saved!");
-    } catch (e) { alert("Error saving config"); }
-  };
-
-  // --- Data Ops (Private Path) ---
 
   const addItem = async (collectionName, item) => {
     if (!user) throw new Error("User not authenticated");
-    
-    try {
-      await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, collectionName), {
-        ...item,
-        paid: false, 
-        createdAt: new Date().toISOString()
-      });
-    } catch (e) { 
-      console.error("Error adding item:", e);
-      throw e; 
-    }
+    await addDoc(collection(db, 'artifacts', appId, 'users', user.uid, collectionName), { ...item, paid: false, createdAt: new Date().toISOString() });
   };
 
   const updateItem = async (collectionName, id, updates) => {
     if (!user) return;
-    try {
-      const docRef = doc(db, 'artifacts', appId, 'users', user.uid, collectionName, id);
-      await updateDoc(docRef, updates);
-    } catch (e) { console.error("Error updating:", e); }
+    await updateDoc(doc(db, 'artifacts', appId, 'users', user.uid, collectionName, id), updates);
   };
 
   const deleteItem = async (collectionName, id) => {
     if (!user) return;
-    try {
-      await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, collectionName, id));
-    } catch (e) { console.error("Error deleting:", e); }
+    await deleteDoc(doc(db, 'artifacts', appId, 'users', user.uid, collectionName, id));
   };
 
   // --- Logic & Calculations ---
-  
   const deductionStats = useMemo(() => {
     if (historicalPaychecks.length === 0) return { rate: 0, label: '0%' };
     const totalGross = historicalPaychecks.reduce((acc, curr) => acc + Number(curr.gross), 0);
     const totalNet = historicalPaychecks.reduce((acc, curr) => acc + Number(curr.net), 0);
-    const deductionRate = 1 - (totalNet / totalGross);
-    return {
-      rate: deductionRate,
-      label: `${(deductionRate * 100).toFixed(1)}%`
-    };
+    return { rate: 1 - (totalNet / totalGross), label: `${((1 - (totalNet / totalGross)) * 100).toFixed(1)}%` };
   }, [historicalPaychecks]);
 
-  // Budget Cycle Calculation
   const currentBudgetCycle = useMemo(() => {
     const start = new Date(budgetConfig.startDate);
     const today = new Date();
-    const freqDays = {
-      'weekly': 7,
-      'bi-weekly': 14,
-      'semi-monthly': 15,
-      'monthly': 30
-    }[budgetConfig.frequency] || 14;
-
-    const diffTime = Math.abs(today - start);
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
+    const freqDays = { 'weekly': 7, 'bi-weekly': 14, 'semi-monthly': 15, 'monthly': 30 }[budgetConfig.frequency] || 14;
+    const diffDays = Math.ceil(Math.abs(today - start) / (1000 * 60 * 60 * 24)); 
     const cyclesPassed = Math.floor(diffDays / freqDays);
-    
     let cycleStart = new Date(start);
-    if (start < today) {
-        cycleStart.setDate(start.getDate() + (cyclesPassed * freqDays));
-    }
-    
-    const cycleEnd = new Date(cycleStart);
-    cycleEnd.setDate(cycleStart.getDate() + freqDays - 1); 
-
+    if (start < today) { cycleStart.setDate(start.getDate() + (cyclesPassed * freqDays)); if (cycleStart > today) cycleStart.setDate(cycleStart.getDate() - freqDays); }
+    const cycleEnd = new Date(cycleStart); cycleEnd.setDate(cycleStart.getDate() + freqDays - 1); 
     return { start: cycleStart, end: cycleEnd };
   }, [budgetConfig]);
 
   const totalIncome = incomes.reduce((acc, curr) => acc + Number(curr.amount), 0);
   const totalBillExpenses = bills.reduce((acc, curr) => acc + Number(curr.amount), 0);
+  const totalMiscExpenses = expenses.reduce((acc, curr) => acc + Number(curr.amount), 0);
   const totalDebt = liabilities.reduce((acc, curr) => acc + Number(curr.currentBal), 0);
   const totalMinPayments = liabilities.reduce((acc, curr) => acc + Number(curr.minPayment), 0);
-  const totalExpenses = totalBillExpenses + totalMinPayments;
+  const totalExpenses = totalBillExpenses + totalMinPayments + totalMiscExpenses;
   const remaining = totalIncome - totalExpenses;
 
   const getNextOccurrence = (day) => {
@@ -377,106 +295,162 @@ export default function SmartBudgetApp() {
     return d;
   };
 
-  // --- Obligations Logic ---
   const categorizedObligations = useMemo(() => {
-    const today = new Date();
-    today.setHours(0,0,0,0);
     const { start, end } = currentBudgetCycle;
-
-    let overdue = [];
-    let current = [];
-    let future = [];
-
+    let overdue = [], current = [], future = [];
     const categorize = (item, dueDate, isPaid) => {
-      const d = new Date(dueDate);
-      d.setHours(0,0,0,0);
-      
+      const d = new Date(dueDate); d.setHours(0,0,0,0);
       const itemWithDate = { ...item, dueDateDisplay: d.toISOString().split('T')[0] };
-
-      if (d < start && !isPaid) {
-        overdue.push(itemWithDate);
-      } else if (d >= start && d <= end) {
-        current.push(itemWithDate);
-      } else if (d > end) {
-        future.push(itemWithDate);
-      }
+      if (d < start && !isPaid) overdue.push(itemWithDate);
+      else if (d >= start && d <= end) current.push(itemWithDate);
+      else if (d > end) future.push(itemWithDate);
     };
-
-    bills.forEach(b => {
-      if (b.date) categorize({ ...b, type: 'bill' }, b.date, b.paid);
-    });
-
+    bills.forEach(b => { if (b.date) categorize({ ...b, type: 'bill' }, b.date, b.paid); });
     liabilities.forEach(l => {
-      let d = null;
-      if (l.dueDay) {
-        d = getNextOccurrence(l.dueDay);
-      } else if (l.dueDate) {
-        d = new Date(l.dueDate); 
-      }
-      
+      let d = l.dueDay ? getNextOccurrence(l.dueDay) : (l.dueDate ? new Date(l.dueDate) : null);
       if (d) {
         let isPaidForCycle = false;
-        if (l.lastPaymentDate) {
-           const payDate = new Date(l.lastPaymentDate);
-           if (payDate >= start && payDate <= end) isPaidForCycle = true;
-        }
+        if (l.lastPaymentDate) { const pd = new Date(l.lastPaymentDate); if (pd >= start && pd <= end) isPaidForCycle = true; }
         categorize({ ...l, type: 'liability', amount: l.minPayment, paid: isPaidForCycle }, d, isPaidForCycle);
       }
     });
-
     const sorter = (a, b) => new Date(a.dueDateDisplay) - new Date(b.dueDateDisplay);
-    return {
-      overdue: overdue.sort(sorter),
-      current: current.sort(sorter),
-      future: future.sort(sorter)
-    };
+    return { overdue: overdue.sort(sorter), current: current.sort(sorter), future: future.sort(sorter) };
   }, [bills, liabilities, currentBudgetCycle]);
 
-  // --- AI Features ---
+  // --- Image & Expense Handlers ---
 
-  const generateAiAdvice = async () => {
-    setAiLoading(true);
-    const snapshot = `
-      Current Pay Period: ${currentBudgetCycle.start.toDateString()} to ${currentBudgetCycle.end.toDateString()}
-      Total Income: $${totalIncome}
-      Remaining Cash: $${remaining}
-      Debts: ${liabilities.map(l => `- ${l.name}: $${l.currentBal}`).join(', ')}
-    `;
-
-    const prompt = `You are a helpful financial advisor. Analyze this budget snapshot:\n${snapshot}\n\nProvide 3 short, actionable bullet points about prioritizing the overdue/current bills and managing cash flow for this specific pay period.`;
-
-    try {
-      const advice = await callGemini(prompt);
-      setAiAdvice(advice);
-    } catch (e) {
-      setAiAdvice("Could not generate insights at this moment.");
-    } finally {
-      setAiLoading(false);
-    }
+  const handleImageUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      const base64String = reader.result;
+      setAiParseLoading(true);
+      const prompt = `Analyze this receipt. Extract to JSON: { "name": "Merchant", "amount": 0.00, "date": "YYYY-MM-DD", "category": "Food/Gas/etc" }. Use today (${new Date().toISOString().split('T')[0]}) if no date found.`;
+      try {
+        const jsonStr = await callGemini(prompt, base64String);
+        const result = JSON.parse(jsonStr.replace(/```json/g, '').replace(/```/g, '').trim());
+        setNewExpense({ ...newExpense, name: result.name, amount: result.amount, date: result.date, category: result.category });
+        alert(`Scanned: ${result.name} - $${result.amount}`);
+      } catch (err) { alert("Could not scan receipt."); } 
+      finally { setAiParseLoading(false); }
+    };
+    reader.readAsDataURL(file);
   };
 
-  const handleAiParse = async () => {
-    if (!parseText) return;
-    setAiParseLoading(true);
-    const prompt = `Extract transaction details from this text into a JSON object with keys: "name" (merchant name), "amount" (number only), "date" (YYYY-MM-DD), and "category" (choose from Utilities, Rent, Food, Insurance, Entertainment, Uncategorized). If date is missing use today's date. Text: "${parseText}"`;
-    
+  const handleAddExpense = async () => {
+    if (!newExpense.name || !newExpense.amount) return;
     try {
-      const jsonStr = await callGemini(prompt);
-      const cleanJson = jsonStr.replace(/```json/g, '').replace(/```/g, '').trim();
-      const result = JSON.parse(cleanJson);
-      setParsedResult(result);
-    } catch (e) {
-      alert("AI Parsing failed. Please try standard parsing or check text.");
-    } finally {
-      setAiParseLoading(false);
-    }
+      await addItem('expenses', { ...newExpense, amount: parseFloat(newExpense.amount) });
+      
+      // Update liability balance if selected
+      if (newExpense.paymentMethod !== 'bank') {
+        const liability = liabilities.find(l => l.id === newExpense.paymentMethod);
+        if (liability) {
+          const newBal = parseFloat(liability.currentBal) + parseFloat(newExpense.amount);
+          await updateItem('liabilities', liability.id, { currentBal: newBal });
+          
+          // Logic: Check if transaction date is after closing date. If so, it goes to next statement.
+          // For now, simply adding to current balance is correct. Statement closing logic handles the "move to statement balance".
+          alert(`Added to expenses and updated ${liability.name} balance.`);
+        }
+      } else {
+        alert("Expense added.");
+      }
+      setNewExpense({ name: '', amount: '', date: new Date().toISOString().split('T')[0], paymentMethod: 'bank', category: 'Food' });
+    } catch (e) { alert("Error adding expense: " + e.message); }
   };
 
-  // --- Liability Interactions ---
-  const openChargeModal = (liability) => {
-    setSelectedLiability(liability);
-    setNewCharge({ amount: '', date: new Date().toISOString().split('T')[0], description: '' });
-    setChargeModalOpen(true);
+  // --- Specific Handlers ---
+  const handleSaveBudgetConfig = async () => { if (!user) return; await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'budget_config'), { ...budgetConfig }); alert("Saved!"); };
+  
+  const handleAddHistorical = (e) => { 
+    e.preventDefault(); 
+    const gross = parseFloat(e.target.gross.value); 
+    const net = parseFloat(e.target.net.value); 
+    if (gross && net) { 
+      addItem('historicalPaychecks', { date: e.target.date.value, gross, net }); 
+      e.target.reset(); 
+    } 
+  };
+
+  const handleGrossChange = (e) => { 
+    const gross = e.target.value; 
+    setNewIncome(prev => ({ ...prev, gross, net: isAutoCalc ? (gross * (1 - deductionStats.rate)).toFixed(2) : prev.net })); 
+  };
+
+  const handleAddIncome = async () => { 
+    if (!newIncome.source || !newIncome.net) return; 
+    await addItem('incomes', { source: newIncome.source, amount: parseFloat(newIncome.net), date: newIncome.date, payPeriod: newIncome.payPeriod, type: 'variable' }); 
+    setNewIncome({ source: '', gross: '', net: '', date: new Date().toISOString().split('T')[0], payPeriod: '' }); 
+  };
+
+  const handleAddLiability = async () => { 
+    if (!newLiability.name || !newLiability.currentBal) return; 
+    await addItem('liabilities', { 
+      ...newLiability, 
+      statementBal: parseFloat(newLiability.statementBal)||0, 
+      currentBal: parseFloat(newLiability.currentBal)||0, 
+      minPayment: parseFloat(newLiability.minPayment)||0, 
+      apr: parseFloat(newLiability.apr)||0, 
+      lastPaymentDate: null 
+    }); 
+    setNewLiability({ name: '', type: 'revolving', statementBal: '', currentBal: '', minPayment: '', apr: '', closingDay: '', dueDay: '' }); 
+  };
+
+  const handleAddManualBill = async () => { 
+    if (!manualBill.name || !manualBill.amount) return; 
+    await addItem('bills', { ...manualBill, amount: parseFloat(manualBill.amount) }); 
+    setManualBill({ name: '', amount: '', date: new Date().toISOString().split('T')[0], category: 'Uncategorized', recurring: false }); 
+    alert("Bill added"); 
+  };
+
+  const handleAiParse = async () => { 
+    if (!parseText) return; 
+    setAiParseLoading(true); 
+    const prompt = `Extract transaction details from text to JSON: { "name": "string", "amount": number, "date": "YYYY-MM-DD", "category": "string", "recurring": boolean }. Text: "${parseText}"`; 
+    try { 
+      const jsonStr = await callGemini(prompt); 
+      const result = JSON.parse(jsonStr.replace(/```json/g, '').replace(/```/g, '').trim()); 
+      setParsedResult(result); 
+    } catch (e) { alert("AI Parsing failed."); } 
+    finally { setAiParseLoading(false); } 
+  };
+
+  const confirmParsedBill = async () => { 
+    if (!parsedResult) return; 
+    await addItem('bills', { ...parsedResult, amount: parseFloat(parsedResult.amount) }); 
+    setParsedResult(null); 
+    setParseText(''); 
+    setEntryMode('manual'); 
+    setActiveTab('bills'); 
+  };
+
+  const toggleBillPaid = async (bill) => { 
+    await updateItem('bills', bill.id, { paid: !bill.paid }); 
+  };
+
+  const toggleLiabilityPaid = async (liability) => { 
+    const now = new Date().toISOString(); 
+    const { start, end } = currentBudgetCycle; 
+    let isPaid = false; 
+    if (liability.lastPaymentDate) { 
+      const pd = new Date(liability.lastPaymentDate); 
+      if (pd >= start && pd <= end) isPaid = true; 
+    } 
+    if (isPaid) await updateItem('liabilities', liability.id, { lastPaymentDate: null }); 
+    else await updateItem('liabilities', liability.id, { lastPaymentDate: now }); 
+  };
+
+  const generateAiAdvice = async () => { 
+    setAiLoading(true); 
+    const prompt = `Financial Advisor check. Income: $${totalIncome}, Fixed Expenses: $${totalExpenses}, Debt: $${totalDebt}. Give 3 bullet points advice.`; 
+    try { 
+      const advice = await callGemini(prompt); 
+      setAiAdvice(advice); 
+    } catch (e) { setAiAdvice("AI unavailable."); } 
+    finally { setAiLoading(false); } 
   };
 
   const handleConfirmCharge = async () => {
@@ -492,316 +466,193 @@ export default function SmartBudgetApp() {
   const handleCloseStatement = async (liability) => {
     const interest = (parseFloat(liability.currentBal) * (parseFloat(liability.apr) / 100)) / 12;
     const newBal = parseFloat(liability.currentBal) + interest;
-    
-    if (window.confirm(`Close statement for ${liability.name}?\n\nInterest Added: $${interest.toFixed(2)}\nNew Balance: $${newBal.toFixed(2)}`)) {
+    if (window.confirm(`Close statement? Interest: $${interest.toFixed(2)}`)) {
       try {
         const liabilityRef = doc(db, 'artifacts', appId, 'users', user.uid, 'liabilities', liability.id);
-        await updateDoc(liabilityRef, { 
-          currentBal: newBal,
-          statementBal: newBal 
-        });
+        await updateDoc(liabilityRef, { currentBal: newBal, statementBal: newBal });
       } catch (e) { console.error("Error closing statement:", e); }
     }
   };
 
-  const toggleBillPaid = async (bill) => {
-    await updateItem('bills', bill.id, { paid: !bill.paid });
-  };
-
-  const toggleLiabilityPaid = async (liability) => {
-    const now = new Date().toISOString();
-    const { start, end } = currentBudgetCycle;
-    let isPaid = false;
-    if (liability.lastPaymentDate) {
-       const pd = new Date(liability.lastPaymentDate);
-       if (pd >= start && pd <= end) isPaid = true;
-    }
-
-    if (isPaid) {
-      await updateItem('liabilities', liability.id, { lastPaymentDate: null }); // Undo
-    } else {
-      await updateItem('liabilities', liability.id, { lastPaymentDate: now });
-    }
-  };
-
-  const getStatementEstimate = () => {
-    if (!selectedLiability?.closingDay && !selectedLiability?.closingDate) return "Unknown";
-    const closingDay = parseInt(selectedLiability.closingDay || selectedLiability.closingDate.split('-')[2]);
-    const chargeDay = parseInt(newCharge.date.split('-')[2]);
-    return chargeDay <= closingDay ? "Current Statement (Due soon)" : "Next Statement (Due next cycle)";
-  };
-
-  // --- Add Handlers ---
-  const handleAddHistorical = (e) => {
-    e.preventDefault();
-    const gross = parseFloat(e.target.gross.value);
-    const net = parseFloat(e.target.net.value);
-    if (gross && net) {
-      try {
-        addItem('historicalPaychecks', { date: e.target.date.value, gross, net });
-        e.target.reset();
-      } catch (err) { alert("Failed to add record. Check console/auth."); }
-    }
-  };
-
-  const handleCalculateNet = (grossVal) => {
-    if (!grossVal) return '';
-    const gross = parseFloat(grossVal);
-    const estimatedNet = gross * (1 - deductionStats.rate);
-    return estimatedNet.toFixed(2);
-  };
-
-  const handleGrossChange = (e) => {
-    const gross = e.target.value;
-    setNewIncome(prev => ({
-      ...prev, 
-      gross,
-      net: isAutoCalc ? handleCalculateNet(gross) : prev.net
-    }));
-  };
-
-  const handleAddIncome = async () => {
-    if (!newIncome.source || !newIncome.net) return;
-    try {
-      await addItem('incomes', {
-        source: newIncome.source,
-        amount: parseFloat(newIncome.net),
-        date: newIncome.date,
-        payPeriod: newIncome.payPeriod,
-        type: 'variable'
-      });
-      setNewIncome({ source: '', gross: '', net: '', date: new Date().toISOString().split('T')[0], payPeriod: '' });
-    } catch (e) {
-      alert("Failed to add income: " + e.message);
-    }
-  };
-
-  const handleAddLiability = async () => {
-    if (!newLiability.name || !newLiability.currentBal) return;
-    try {
-      await addItem('liabilities', {
-        ...newLiability,
-        statementBal: parseFloat(newLiability.statementBal) || 0,
-        currentBal: parseFloat(newLiability.currentBal) || 0,
-        minPayment: parseFloat(newLiability.minPayment) || 0,
-        apr: parseFloat(newLiability.apr) || 0,
-        lastPaymentDate: null
-      });
-      setNewLiability({
-        name: '', type: 'revolving', statementBal: '', currentBal: '', 
-        minPayment: '', apr: '', closingDay: '', dueDay: ''
-      });
-    } catch (e) {
-      alert("Failed to add liability: " + e.message);
-    }
-  };
-
-  const parseBillText = () => {
-    const amountPattern = /\$?\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/;
-    const datePattern = /(\d{1,2}[\/\-.]\d{1,2}[\/\-.]\d{2,4})|(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2},? \d{4}/i;
-    const lines = parseText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-    let foundAmount = null;
-    let foundDate = null;
-    let foundName = "Unknown Vendor";
-    const amountMatch = parseText.match(amountPattern);
-    if (amountMatch) foundAmount = amountMatch[1].replace(',', '');
-    const dateMatch = parseText.match(datePattern);
-    if (dateMatch) foundDate = dateMatch[0];
-    if (lines.length > 0) {
-      const potentialName = lines.find(l => !l.match(amountPattern) && !l.match(datePattern) && l.length > 3);
-      if (potentialName) foundName = potentialName.substring(0, 20);
-    }
-    setParsedResult({
-      name: foundName,
-      amount: foundAmount || '',
-      date: foundDate || new Date().toISOString().split('T')[0],
-      category: 'Uncategorized'
-    });
-  };
-
-  const confirmParsedBill = async () => {
-    if (!parsedResult) return;
-    try {
-      await addItem('bills', { ...parsedResult, amount: parseFloat(parsedResult.amount) });
-      setParsedResult(null);
-      setParseText('');
-      setActiveTab('bills');
-    } catch (e) {
-      alert("Failed to add bill: " + e.message);
-    }
-  };
+  // --- Helper Components ---
+  const InfoIcon = ({size}) => <AlertCircle size={size} />;
 
   // --- Render Functions ---
-
-  const renderAuth = () => (
-    <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
-      <Card className="w-full max-w-md p-8 shadow-xl animate-in fade-in zoom-in-95 duration-300">
-        <div className="text-center mb-8">
-          <div className="bg-blue-100 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 text-blue-600 rotate-3">
-            <Key size={32} />
-          </div>
-          <h1 className="text-2xl font-bold text-slate-800">SmartBudget</h1>
-          <p className="text-slate-500 mt-2">Secure Cloud Login</p>
-        </div>
-
-        <div className="space-y-4">
-          <Button onClick={handleGoogleLogin} variant="google" className="w-full justify-center py-3 flex gap-2">
-            <svg className="w-5 h-5" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"/><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/></svg>
-            Sign in with Google
-          </Button>
-
-          <div className="relative flex items-center py-2">
-            <div className="flex-grow border-t border-slate-200"></div>
-            <span className="flex-shrink-0 mx-4 text-slate-400 text-xs">OR WITH EMAIL</span>
-            <div className="flex-grow border-t border-slate-200"></div>
-          </div>
-
-          <form onSubmit={handleEmailAuth} className="space-y-3">
-            {authMode === 'signup' && (
-              <div className="relative">
-                <User className="absolute left-3 top-2.5 text-slate-400" size={18} />
-                <input type="text" placeholder="Full Name" value={fullName} onChange={e => setFullName(e.target.value)} className="w-full pl-10 p-2 border rounded" required />
-              </div>
-            )}
-            <div className="relative">
-              <Mail className="absolute left-3 top-2.5 text-slate-400" size={18} />
-              <input type="email" placeholder="Email" value={email} onChange={e => setEmail(e.target.value)} className="w-full pl-10 p-2 border rounded" required />
-            </div>
-            <div className="relative">
-              <Lock className="absolute left-3 top-2.5 text-slate-400" size={18} />
-              <input type="password" placeholder="Password" value={password} onChange={e => setPassword(e.target.value)} className="w-full pl-10 p-2 border rounded" required />
-            </div>
-            {authError && <p className="text-red-500 text-xs">{authError}</p>}
-            <Button type="submit" className="w-full justify-center">
-              {authMode === 'login' ? 'Sign In' : 'Create Account'}
-            </Button>
-          </form>
-          
-          <div className="text-center text-xs text-slate-500 mt-4">
-            <button onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')} className="text-blue-600 hover:underline">
-              {authMode === 'login' ? 'Need an account? Sign up' : 'Already have an account? Sign in'}
-            </button>
-          </div>
-        </div>
-      </Card>
-    </div>
-  );
 
   const renderDashboard = () => (
     <div className="space-y-6 animate-in fade-in">
       <Card className="p-6 border-l-4 border-l-purple-500 bg-purple-50">
         <div className="flex items-start justify-between">
           <div className="flex items-start gap-4">
-            <div className="p-3 rounded-full bg-purple-200 text-purple-700">
-              <Sparkles size={24} />
-            </div>
-            <div>
-              <h3 className="text-lg font-bold text-slate-800">AI Financial Advisor</h3>
-              <p className="text-slate-600 mt-1 text-sm">
-                {aiAdvice ? "Here is your personalized report:" : "Get a smart analysis of your budget, debts, and cash flow."}
-              </p>
-            </div>
+            <div className="p-3 rounded-full bg-purple-200 text-purple-700"><Sparkles size={24} /></div>
+            <div><h3 className="text-lg font-bold text-slate-800">AI Financial Advisor</h3><p className="text-slate-600 mt-1 text-sm">{aiAdvice || "Get smart analysis of your budget."}</p></div>
           </div>
-          <Button onClick={generateAiAdvice} variant="magic" disabled={aiLoading} className="shrink-0">
-            {aiLoading ? <Loader2 className="animate-spin" /> : <><Sparkles size={16} /> Get AI Insights</>}
-          </Button>
+          <Button onClick={generateAiAdvice} variant="magic" disabled={aiLoading} className="shrink-0">{aiLoading ? <Loader2 className="animate-spin" /> : "Get Insights"}</Button>
         </div>
-        {aiAdvice && (
-          <div className="mt-4 p-4 bg-white rounded-lg border border-purple-100 text-slate-700 text-sm leading-relaxed whitespace-pre-line animate-in fade-in slide-in-from-top-2">
-            {aiAdvice}
-          </div>
-        )}
+        {aiAdvice && <div className="mt-4 p-4 bg-white rounded-lg border border-purple-100 text-slate-700 text-sm">{aiAdvice}</div>}
       </Card>
 
       <Card className="p-6 bg-slate-800 text-white">
         <div className="flex items-center justify-between mb-4">
-           <div className="flex items-center gap-2">
-             <Clock className="text-yellow-400" size={20} />
-             <h3 className="text-lg font-bold">Obligations Tracker</h3>
-           </div>
-           <div className="text-xs bg-slate-700 px-2 py-1 rounded text-slate-300">
-             {currentBudgetCycle.start.toLocaleDateString()} - {currentBudgetCycle.end.toLocaleDateString()}
-           </div>
+           <div className="flex items-center gap-2"><Clock className="text-yellow-400" size={20} /><h3 className="text-lg font-bold">Obligations</h3></div>
+           <div className="text-xs bg-slate-700 px-2 py-1 rounded text-slate-300">{currentBudgetCycle.start.toLocaleDateString()} - {currentBudgetCycle.end.toLocaleDateString()}</div>
         </div>
-
         <div className="space-y-4">
-          {/* Overdue Section */}
           {categorizedObligations.overdue.length > 0 && (
             <div className="bg-red-900/30 border border-red-700 p-3 rounded-lg">
-              <h4 className="text-red-300 font-bold text-sm mb-2 flex items-center gap-1"><AlertCircle size={14} /> Overdue / Unpaid Past</h4>
-              <div className="space-y-1">
-                {categorizedObligations.overdue.map((item, idx) => (
-                  <div key={idx} className="flex justify-between items-center bg-slate-900/50 p-2 rounded">
-                    <span className="text-sm font-medium">{item.name} <span className="text-xs opacity-50">({item.dueDateDisplay})</span></span>
-                    <div className="flex items-center gap-3">
-                      <span className="font-bold text-red-400">${Number(item.amount).toFixed(2)}</span>
-                      <button onClick={() => item.type === 'bill' ? toggleBillPaid(item) : toggleLiabilityPaid(item)}>
-                        <Square className="text-red-400 hover:text-white" size={18} />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <h4 className="text-red-300 font-bold text-sm mb-2">Overdue</h4>
+              {categorizedObligations.overdue.map((item, idx) => (
+                <div key={idx} className="flex justify-between items-center py-1">
+                  <span className="text-sm">{item.name}</span>
+                  <div className="flex gap-2"><span className="text-red-400 font-bold">${Number(item.amount).toFixed(2)}</span><button onClick={() => item.type === 'bill' ? toggleBillPaid(item) : toggleLiabilityPaid(item)}><Square className="text-red-400" size={16} /></button></div>
+                </div>
+              ))}
             </div>
           )}
-
-          {/* Current Period Section */}
-          <div>
-            <h4 className="text-yellow-300 font-bold text-sm mb-2">Due This Pay Period</h4>
-            <div className="space-y-1">
-              {categorizedObligations.current.length === 0 ? (
-                <p className="text-slate-500 text-sm italic">No pending bills for this cycle.</p>
-              ) : (
-                categorizedObligations.current.filter(i => !i.paid).map((item, idx) => (
-                  <div key={idx} className="flex justify-between items-center bg-slate-700/50 p-2 rounded">
-                    <div className="flex items-center gap-2">
-                       {item.type === 'bill' ? <Receipt size={14} className="text-blue-300" /> : <CreditCard size={14} className="text-purple-300" />}
-                       <div>
-                         <p className="text-sm font-medium">{item.name}</p>
-                         <p className="text-xs text-slate-400">Due: {item.dueDateDisplay}</p>
-                       </div>
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <span className="font-bold text-white">${Number(item.amount).toFixed(2)}</span>
-                      <button onClick={() => item.type === 'bill' ? toggleBillPaid(item) : toggleLiabilityPaid(item)}>
-                        <Square className="text-slate-400 hover:text-green-400" size={18} />
-                      </button>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </div>
-
-          {/* Future Preview */}
+          {categorizedObligations.current.length === 0 ? <p className="text-slate-500 text-sm italic">No pending bills this cycle.</p> : categorizedObligations.current.filter(i => !i.paid).map((item, idx) => (
+             <div key={idx} className="flex justify-between items-center bg-slate-700/50 p-2 rounded">
+                <span className="text-sm">{item.name}</span>
+                <div className="flex gap-2 items-center"><span className="font-bold text-white">${Number(item.amount).toFixed(2)}</span><button onClick={() => item.type === 'bill' ? toggleBillPaid(item) : toggleLiabilityPaid(item)}><Square className="text-slate-400 hover:text-green-400" size={18} /></button></div>
+             </div>
+          ))}
           <div className="pt-2 border-t border-slate-700">
-             <button onClick={() => alert("Future obligations: " + categorizedObligations.future.map(i => `${i.name} ($${i.amount})`).join(', '))} className="text-xs text-slate-400 hover:text-white flex items-center gap-1">
-               See {categorizedObligations.future.length} future items <TrendingDown size={10} />
-             </button>
+             <button onClick={() => setShowFuture(!showFuture)} className="w-full flex items-center justify-between text-xs text-slate-400 hover:text-white p-2 rounded hover:bg-slate-700"><span>Future Obligations ({categorizedObligations.future.length})</span>{showFuture ? <ChevronUp size={14} /> : <ChevronDown size={14} />}</button>
+             {showFuture && <div className="mt-2 space-y-1 pl-2 border-l-2 border-slate-600">{categorizedObligations.future.map((item, idx) => <div key={idx} className="flex justify-between py-1 text-xs"><span className="text-slate-300">{item.name} <span className="text-slate-500">({item.dueDateDisplay})</span></span><span className="text-slate-400">${Number(item.amount).toFixed(2)}</span></div>)}</div>}
           </div>
         </div>
       </Card>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <Card className="p-4 border-l-4 border-l-green-500">
-          <p className="text-xs font-bold text-slate-500 uppercase">Total Income</p>
-          <h3 className="text-xl font-bold text-slate-800">${totalIncome.toLocaleString(undefined, { minimumFractionDigits: 2 })}</h3>
+        <Card className="p-4 border-l-4 border-l-green-500"><p className="text-xs font-bold text-slate-500 uppercase">Income</p><h3 className="text-xl font-bold text-slate-800">${totalIncome.toLocaleString()}</h3></Card>
+        <Card className="p-4 border-l-4 border-l-red-500 relative">
+          <button onClick={() => setExpandedExpenses(!expandedExpenses)} className="w-full text-left"><div className="flex justify-between"><div><p className="text-xs font-bold text-slate-500 uppercase flex items-center gap-1">Expenses {expandedExpenses ? <ChevronUp size={12}/> : <ChevronDown size={12}/>}</p><h3 className="text-xl font-bold text-slate-800">${totalExpenses.toLocaleString()}</h3></div></div></button>
+          {expandedExpenses && <div className="mt-3 pt-3 border-t border-slate-100 text-xs space-y-1"><div className="flex justify-between"><span className="text-slate-500">Bills:</span><span className="font-medium">${totalBillExpenses.toFixed(2)}</span></div><div className="flex justify-between"><span className="text-slate-500">Misc:</span><span className="font-medium">${totalMiscExpenses.toFixed(2)}</span></div><div className="flex justify-between"><span className="text-slate-500">Debt Min:</span><span className="font-medium">${totalMinPayments.toFixed(2)}</span></div></div>}
         </Card>
-        <Card className="p-4 border-l-4 border-l-red-500">
-          <p className="text-xs font-bold text-slate-500 uppercase">Total Expenses</p>
-          <h3 className="text-xl font-bold text-slate-800">${totalExpenses.toLocaleString(undefined, { minimumFractionDigits: 2 })}</h3>
-          <p className="text-xs text-slate-400 mt-1">Bills + Min Payments</p>
+        <Card className="p-4 border-l-4 border-l-purple-500"><p className="text-xs font-bold text-slate-500 uppercase">Total Debt</p><h3 className="text-xl font-bold text-purple-700">${totalDebt.toLocaleString()}</h3></Card>
+        <Card className="p-4 border-l-4 border-l-blue-500"><p className="text-xs font-bold text-slate-500 uppercase">Remaining</p><h3 className={`text-xl font-bold ${remaining >= 0 ? 'text-blue-600' : 'text-orange-600'}`}>${remaining.toLocaleString()}</h3></Card>
+      </div>
+    </div>
+  );
+
+  const renderExpenses = () => (
+    <div className="max-w-xl mx-auto space-y-6 animate-in fade-in">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-2xl font-bold text-slate-800">Daily Expenses</h2>
+        <div>
+          <input type="file" accept="image/*" capture="environment" className="hidden" ref={fileInputRef} onChange={handleImageUpload} />
+          <Button onClick={() => fileInputRef.current?.click()} variant="magic" disabled={aiParseLoading}>
+            {aiParseLoading ? <Loader2 className="animate-spin" size={18} /> : <><Camera size={18} /> Scan Receipt</>}
+          </Button>
+        </div>
+      </div>
+
+      <Card className="p-6 border-blue-100 shadow-md">
+        <h3 className="text-lg font-bold text-slate-800 mb-4">Add Expense</h3>
+        <div className="space-y-4">
+          <div><label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Merchant / Description</label><input type="text" placeholder="e.g. Starbucks" value={newExpense.name} onChange={e => setNewExpense({...newExpense, name: e.target.value})} className="w-full p-3 border border-slate-200 rounded-lg" /></div>
+          <div className="grid grid-cols-2 gap-4">
+            <div><label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Amount</label><input type="number" placeholder="0.00" value={newExpense.amount} onChange={e => setNewExpense({...newExpense, amount: e.target.value})} className="w-full p-3 border border-slate-200 rounded-lg" /></div>
+            <div><label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Date</label><input type="date" value={newExpense.date} onChange={e => setNewExpense({...newExpense, date: e.target.value})} className="w-full p-3 border border-slate-200 rounded-lg" /></div>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Payment Method</label>
+            <div className="relative">
+              <CreditCard className="absolute left-3 top-3 text-slate-400" size={18} />
+              <select value={newExpense.paymentMethod} onChange={e => setNewExpense({...newExpense, paymentMethod: e.target.value})} className="w-full pl-10 p-3 border border-slate-200 rounded-lg appearance-none bg-white">
+                <option value="bank">🏦 Bank Account / Cash</option>
+                {liabilities.filter(l => l.type === 'revolving').map(card => <option key={card.id} value={card.id}>💳 {card.name}</option>)}
+              </select>
+            </div>
+            {newExpense.paymentMethod !== 'bank' && <p className="text-xs text-blue-600 mt-1 flex items-center gap-1"><InfoIcon size={12} /> Adds to credit card balance.</p>}
+          </div>
+          <Button onClick={handleAddExpense} className="w-full">Save Expense</Button>
+        </div>
+      </Card>
+
+      <div className="space-y-2">
+        <h4 className="font-semibold text-slate-700">Recent Transactions</h4>
+        {expenses.slice(0, 5).map(exp => (
+          <div key={exp.id} className="flex justify-between items-center bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
+            <div><p className="font-medium text-slate-800">{exp.name}</p><div className="flex gap-2 text-xs text-slate-500"><span>{exp.date}</span><span className="bg-slate-100 px-1 rounded">{exp.category}</span></div></div>
+            <div className="text-right"><span className="font-bold text-slate-800">-${Number(exp.amount).toFixed(2)}</span><button onClick={() => deleteItem('expenses', exp.id)} className="ml-3 text-slate-400 hover:text-red-500"><Trash2 size={16} /></button></div>
+          </div>
+        ))}
+        {expenses.length === 0 && <p className="text-center text-slate-400 py-4">No expenses recorded yet.</p>}
+      </div>
+    </div>
+  );
+
+  const renderParser = () => (
+    <div className="max-w-2xl mx-auto space-y-6 animate-in fade-in">
+      <div className="flex justify-center mb-6">
+        <div className="bg-slate-100 p-1 rounded-lg flex">
+          <button onClick={() => setEntryMode('manual')} className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${entryMode === 'manual' ? 'bg-white shadow text-blue-600' : 'text-slate-500'}`}>Manual Entry</button>
+          <button onClick={() => setEntryMode('scan')} className={`px-4 py-2 text-sm font-medium rounded-md transition-all ${entryMode === 'scan' ? 'bg-white shadow text-purple-600' : 'text-slate-500'}`}>Scan with AI</button>
+        </div>
+      </div>
+      {entryMode === 'scan' ? (
+        <Card className="p-6">
+          <textarea value={parseText} onChange={(e) => setParseText(e.target.value)} placeholder="Paste bill text..." className="w-full h-40 p-4 border rounded-lg mb-4 font-mono text-sm" />
+          <div className="flex justify-end"><Button onClick={handleAiParse} variant="magic" disabled={aiParseLoading}>{aiParseLoading ? <Loader2 className="animate-spin" /> : "Parse"}</Button></div>
         </Card>
-        <Card className="p-4 border-l-4 border-l-purple-500">
-          <p className="text-xs font-bold text-slate-500 uppercase">Total Debt</p>
-          <h3 className="text-xl font-bold text-purple-700">${totalDebt.toLocaleString(undefined, { minimumFractionDigits: 2 })}</h3>
+      ) : (
+        <Card className="p-6">
+          <h3 className="text-lg font-bold text-slate-800 mb-4">Add Bill Manually</h3>
+          <div className="space-y-4">
+            <div><label className="text-xs font-bold uppercase text-slate-500">Name</label><input value={manualBill.name} onChange={e => setManualBill({...manualBill, name: e.target.value})} className="w-full p-3 border rounded" /></div>
+            <div className="grid grid-cols-2 gap-4">
+              <div><label className="text-xs font-bold uppercase text-slate-500">Amount</label><input type="number" value={manualBill.amount} onChange={e => setManualBill({...manualBill, amount: e.target.value})} className="w-full p-3 border rounded" /></div>
+              <div><label className="text-xs font-bold uppercase text-slate-500">Date</label><input type="date" value={manualBill.date} onChange={e => setManualBill({...manualBill, date: e.target.value})} className="w-full p-3 border rounded" /></div>
+            </div>
+            <div className="flex items-center gap-2 p-3 bg-slate-50 rounded border"><input type="checkbox" checked={manualBill.recurring} onChange={e => setManualBill({...manualBill, recurring: e.target.checked})} /><label className="text-sm">Recurring Monthly</label></div>
+            <Button onClick={handleAddManualBill} className="w-full">Save Bill</Button>
+          </div>
         </Card>
-        <Card className={`p-4 border-l-4 ${remaining >= 0 ? 'border-l-blue-500' : 'border-l-orange-500'}`}>
-          <p className="text-xs font-bold text-slate-500 uppercase">Remaining</p>
-          <h3 className={`text-xl font-bold ${remaining >= 0 ? 'text-blue-600' : 'text-orange-600'}`}>
-            ${remaining.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-          </h3>
+      )}
+      {parsedResult && entryMode === 'scan' && (
+        <Card className="p-6 bg-purple-50 border-purple-100 mt-4">
+          <div className="space-y-4">
+             <div className="grid grid-cols-2 gap-4">
+                <input value={parsedResult.name} onChange={e => setParsedResult({...parsedResult, name: e.target.value})} className="p-2 border rounded" />
+                <input type="number" value={parsedResult.amount} onChange={e => setParsedResult({...parsedResult, amount: e.target.value})} className="p-2 border rounded" />
+             </div>
+             <input type="date" value={parsedResult.date} onChange={e => setParsedResult({...parsedResult, date: e.target.value})} className="w-full p-2 border rounded" />
+             <div className="flex gap-2"><Button onClick={confirmParsedBill} className="w-full">Add</Button><Button onClick={() => setParsedResult(null)} variant="secondary">Cancel</Button></div>
+          </div>
         </Card>
+      )}
+    </div>
+  );
+
+  const renderIncome = () => (
+    <div className="space-y-6 animate-in fade-in">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-1 space-y-6">
+          <Card className="p-6 bg-blue-50 border-blue-200">
+            <div className="flex items-center gap-2 mb-4"><Settings className="text-blue-600" size={20} /><h3 className="font-bold text-slate-800">Budget Cycle</h3></div>
+            <div className="space-y-3">
+              <div><label className="text-xs font-bold uppercase text-blue-700">Start Date</label><input type="date" value={budgetConfig.startDate} onChange={e => setBudgetConfig({...budgetConfig, startDate: e.target.value})} className="w-full p-2 border rounded" /></div>
+              <div><label className="text-xs font-bold uppercase text-blue-700">Pay Date</label><input type="date" value={budgetConfig.payDate} onChange={e => setBudgetConfig({...budgetConfig, payDate: e.target.value})} className="w-full p-2 border rounded" /></div>
+              <div><label className="text-xs font-bold uppercase text-blue-700">Frequency</label><select value={budgetConfig.frequency} onChange={e => setBudgetConfig({...budgetConfig, frequency: e.target.value})} className="w-full p-2 border rounded"><option value="weekly">Weekly</option><option value="bi-weekly">Bi-Weekly</option><option value="monthly">Monthly</option></select></div>
+              <Button onClick={handleSaveBudgetConfig} className="w-full text-xs">Save Settings</Button>
+            </div>
+          </Card>
+          <Card className="p-6 bg-slate-50 border-slate-200">
+             <h3 className="font-bold mb-4">Calibration</h3>
+             <form onSubmit={handleAddHistorical} className="space-y-2"><input name="gross" placeholder="Gross" className="w-full p-2 border rounded"/><input name="net" placeholder="Net" className="w-full p-2 border rounded"/><Button type="submit" className="w-full">Add History</Button></form>
+          </Card>
+        </div>
+        <div className="lg:col-span-2 space-y-6">
+           <Card className="p-6 border-blue-100 shadow-md">
+              <h3 className="text-xl font-bold mb-4">Add Income</h3>
+              <div className="space-y-4">
+                 <input placeholder="Source" value={newIncome.source} onChange={e => setNewIncome({...newIncome, source: e.target.value})} className="w-full p-3 border rounded"/>
+                 <div className="grid grid-cols-2 gap-4"><input type="number" placeholder="Gross" value={newIncome.gross} onChange={handleGrossChange} className="p-3 border rounded"/><input type="number" placeholder="Net" value={newIncome.net} onChange={e => setNewIncome({...newIncome, net: e.target.value})} className="p-3 border rounded"/></div>
+                 <Button onClick={handleAddIncome} className="w-full">Add Income</Button>
+              </div>
+           </Card>
+           <div className="space-y-2">{incomes.map(i => <div key={i.id} className="flex justify-between p-3 bg-white border rounded"><span>{i.source}</span><span>${i.amount}</span><button onClick={() => deleteItem('incomes', i.id)}><Trash2 size={16} /></button></div>)}</div>
+        </div>
       </div>
     </div>
   );
@@ -811,413 +662,35 @@ export default function SmartBudgetApp() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-1">
           <Card className="p-5 bg-slate-50 border-slate-200 sticky top-4">
-            <h3 className="font-bold text-slate-800 mb-4 flex items-center gap-2">
-              <Plus size={18} className="text-purple-600" /> Add Liability
-            </h3>
-            {/* Same Liability Form as before */}
+            <h3 className="font-bold text-slate-800 mb-4">Add Liability</h3>
             <div className="space-y-3">
-              <div>
-                <label className="text-xs font-semibold text-slate-500 uppercase">Type</label>
-                <div className="flex bg-white rounded-lg p-1 border border-slate-200 mt-1">
-                  <button onClick={() => setNewLiability({...newLiability, type: 'revolving'})} className={`flex-1 py-1.5 text-xs font-medium rounded ${newLiability.type === 'revolving' ? 'bg-purple-100 text-purple-700' : 'text-slate-500'}`}>Revolving (CC)</button>
-                  <button onClick={() => setNewLiability({...newLiability, type: 'installment'})} className={`flex-1 py-1.5 text-xs font-medium rounded ${newLiability.type === 'installment' ? 'bg-blue-100 text-blue-700' : 'text-slate-500'}`}>Installment</button>
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Creditor Name</label>
-                <input type="text" placeholder="e.g. Chase Visa" value={newLiability.name} onChange={e => setNewLiability({...newLiability, name: e.target.value})} className="w-full p-2 text-sm border rounded" />
-              </div>
-              {newLiability.type === 'revolving' ? (
-                <>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Statement Bal</label>
-                      <input type="number" placeholder="0.00" value={newLiability.statementBal} onChange={e => setNewLiability({...newLiability, statementBal: e.target.value})} className="w-full p-2 text-sm border rounded" />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Current Bal</label>
-                      <input type="number" placeholder="0.00" value={newLiability.currentBal} onChange={e => setNewLiability({...newLiability, currentBal: e.target.value})} className="w-full p-2 text-sm border rounded" />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Min Pay</label>
-                      <input type="number" placeholder="0.00" value={newLiability.minPayment} onChange={e => setNewLiability({...newLiability, minPayment: e.target.value})} className="w-full p-2 text-sm border rounded" />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">APR %</label>
-                      <input type="number" placeholder="24.99" value={newLiability.apr} onChange={e => setNewLiability({...newLiability, apr: e.target.value})} className="w-full p-2 text-sm border rounded" />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Closing Day (1-31)</label>
-                      <input type="number" min="1" max="31" placeholder="DD" value={newLiability.closingDay} onChange={e => setNewLiability({...newLiability, closingDay: e.target.value})} className="w-full p-2 text-sm border rounded" />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Due Day (1-31)</label>
-                      <input type="number" min="1" max="31" placeholder="DD" value={newLiability.dueDay} onChange={e => setNewLiability({...newLiability, dueDay: e.target.value})} className="w-full p-2 text-sm border rounded" />
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Remaining Principal</label>
-                    <input type="number" placeholder="Total Loan Amount" value={newLiability.currentBal} onChange={e => setNewLiability({...newLiability, currentBal: e.target.value})} className="w-full p-2 text-sm border rounded" />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Monthly Pay</label>
-                      <input type="number" placeholder="0.00" value={newLiability.minPayment} onChange={e => setNewLiability({...newLiability, minPayment: e.target.value})} className="w-full p-2 text-sm border rounded" />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">APR %</label>
-                      <input type="number" placeholder="5.0" value={newLiability.apr} onChange={e => setNewLiability({...newLiability, apr: e.target.value})} className="w-full p-2 text-sm border rounded" />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Due Day (1-31)</label>
-                    <input type="number" min="1" max="31" placeholder="Day of Month" value={newLiability.dueDay} onChange={e => setNewLiability({...newLiability, dueDay: e.target.value})} className="w-full p-2 text-sm border rounded" />
-                  </div>
-                </>
-              )}
-              <Button onClick={handleAddLiability} className="w-full mt-2 text-sm">Add Liability</Button>
+               <div className="flex bg-white rounded p-1 border"><button onClick={() => setNewLiability({...newLiability, type: 'revolving'})} className={`flex-1 py-1 rounded ${newLiability.type === 'revolving' ? 'bg-purple-100' : ''}`}>Card</button><button onClick={() => setNewLiability({...newLiability, type: 'installment'})} className={`flex-1 py-1 rounded ${newLiability.type === 'installment' ? 'bg-blue-100' : ''}`}>Loan</button></div>
+               <input placeholder="Name" value={newLiability.name} onChange={e => setNewLiability({...newLiability, name: e.target.value})} className="w-full p-2 border rounded"/>
+               <input type="number" placeholder="Current Balance" value={newLiability.currentBal} onChange={e => setNewLiability({...newLiability, currentBal: e.target.value})} className="w-full p-2 border rounded"/>
+               <input type="number" placeholder="Min Payment" value={newLiability.minPayment} onChange={e => setNewLiability({...newLiability, minPayment: e.target.value})} className="w-full p-2 border rounded"/>
+               <Button onClick={handleAddLiability} className="w-full">Add Liability</Button>
             </div>
           </Card>
         </div>
-
-        <div className="lg:col-span-2 space-y-6">
-          {/* Revolving */}
-          <div>
-            <h3 className="font-bold text-purple-800 mb-3 flex items-center gap-2">
-              <CreditCard size={20} /> Revolving Credit
-            </h3>
-            <div className="space-y-3">
-              {liabilities.filter(l => l.type === 'revolving').map(debt => {
-                // Determine if paid for current cycle
-                const { start, end } = currentBudgetCycle;
-                let isPaid = false;
-                if (debt.lastPaymentDate) {
-                   const pd = new Date(debt.lastPaymentDate);
-                   if (pd >= start && pd <= end) isPaid = true;
-                }
-
-                return (
-                  <Card key={debt.id} className={`p-4 border-l-4 ${isPaid ? 'border-l-green-400 bg-slate-50' : 'border-l-purple-400'} transition-all`}>
-                    <div className="flex justify-between items-start mb-3">
-                      <div>
-                        <h4 className="font-bold text-slate-800 flex items-center gap-2">
-                          {debt.name} 
-                          {isPaid && <span className="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full flex items-center gap-1"><CheckCircle size={10} /> Paid</span>}
-                        </h4>
-                        <div className="flex gap-2 text-xs text-slate-500 mt-1">
-                          <span className="flex items-center gap-1"><Calendar size={10} /> Close Day: {debt.closingDay || 'N/A'}</span>
-                          <span className="flex items-center gap-1"><AlertCircle size={10} /> Due Day: {debt.dueDay || 'N/A'}</span>
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-2xl font-bold text-slate-800">${debt.currentBal.toFixed(2)}</div>
-                        <div className="text-xs text-slate-500">Current Balance</div>
-                      </div>
-                    </div>
-                    {/* ... grid of details ... */}
-                    <div className="grid grid-cols-3 gap-2 bg-white/50 p-3 rounded-lg text-xs">
-                      <div><p className="text-slate-500">Statement</p><p className="font-semibold">${debt.statementBal.toFixed(2)}</p></div>
-                      <div><p className="text-slate-500">New Charges</p><p className="font-semibold text-orange-600">+${Math.max(0, debt.currentBal - debt.statementBal).toFixed(2)}</p></div>
-                      <div><p className="text-slate-500">Min Pay</p><p className="font-semibold text-red-600">${debt.minPayment.toFixed(2)}</p></div>
-                    </div>
-                    
-                    <div className="mt-4 flex gap-2 justify-end items-center border-t border-slate-100 pt-3">
-                      <button 
-                        onClick={() => toggleLiabilityPaid(debt)}
-                        className={`text-xs flex items-center gap-1 px-3 py-1.5 rounded border transition-colors ${isPaid ? 'bg-green-50 text-green-700 border-green-200' : 'bg-slate-50 text-slate-600 border-slate-200'}`}
-                      >
-                        {isPaid ? <CheckSquare size={14}/> : <Square size={14}/>} {isPaid ? 'Paid' : 'Mark Paid'}
-                      </button>
-                      
-                      <div className="h-4 w-px bg-slate-200 mx-1"></div>
-
-                      <Button onClick={() => openChargeModal(debt)} variant="secondary" className="px-3 py-1.5 text-xs">
-                         <Plus size={14} /> Charge
-                      </Button>
-                      <Button onClick={() => handleCloseStatement(debt)} variant="outline" className="px-3 py-1.5 text-xs text-purple-700 border-purple-200 bg-purple-50 hover:bg-purple-100">
-                         <RefreshCw size={14} /> Close Stmt
-                      </Button>
-                      <button onClick={() => deleteItem('liabilities', debt.id)} className="text-xs text-red-400 hover:text-red-600 flex items-center gap-1 px-2">
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </Card>
-                );
-              })}
-            </div>
-          </div>
-          
-          {/* Installment Loans Section */}
-          <div>
-            <h3 className="font-bold text-blue-800 mb-3 flex items-center gap-2">
-              <History size={20} /> Installment Loans
-            </h3>
-            <div className="space-y-3">
-              {liabilities.filter(l => l.type === 'installment').map(debt => {
-                const { start, end } = currentBudgetCycle;
-                let isPaid = false;
-                if (debt.lastPaymentDate) {
-                   const pd = new Date(debt.lastPaymentDate);
-                   if (pd >= start && pd <= end) isPaid = true;
-                }
-
-                return (
-                  <Card key={debt.id} className={`p-4 border-l-4 ${isPaid ? 'border-l-green-400 bg-slate-50' : 'border-l-blue-400'} transition-all`}>
-                     <div className="flex justify-between items-start mb-2">
-                        <div>
-                          <h4 className="font-bold text-slate-800 flex items-center gap-2">
-                            {debt.name}
-                            {isPaid && <span className="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full flex items-center gap-1"><CheckCircle size={10} /> Paid</span>}
-                          </h4>
-                          <span className="text-xs text-slate-500">APR: {debt.apr}%</span>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-xl font-bold text-slate-800">${debt.currentBal.toFixed(2)}</div>
-                          <div className="text-xs text-slate-500">Remaining Principal</div>
-                        </div>
-                      </div>
-                      <div className="flex justify-between items-center bg-slate-50 p-2 rounded text-xs">
-                        <span className="text-slate-600">Monthly Payment: <span className="font-bold text-red-600">${debt.minPayment.toFixed(2)}</span></span>
-                        <span className="text-slate-600 flex items-center gap-1"><AlertCircle size={10}/> Due Day: {debt.dueDay || 'N/A'}</span>
-                      </div>
-                       <div className="mt-2 flex justify-end items-center gap-2 border-t border-slate-100 pt-2">
-                        <button 
-                          onClick={() => toggleLiabilityPaid(debt)}
-                          className={`text-xs flex items-center gap-1 px-3 py-1.5 rounded border transition-colors ${isPaid ? 'bg-green-50 text-green-700 border-green-200' : 'bg-slate-50 text-slate-600 border-slate-200'}`}
-                        >
-                          {isPaid ? <CheckSquare size={14}/> : <Square size={14}/>} {isPaid ? 'Paid' : 'Mark Paid'}
-                        </button>
-                        <button onClick={() => deleteItem('liabilities', debt.id)} className="text-xs text-red-400 hover:text-red-600 flex items-center gap-1">
-                          <Trash2 size={12} /> Remove
-                        </button>
-                      </div>
-                  </Card>
-                );
-              })}
-               {liabilities.filter(l => l.type === 'installment').length === 0 && <p className="text-sm text-slate-400 italic">No installment loans.</p>}
-            </div>
-          </div>
+        <div className="lg:col-span-2 space-y-4">
+           <div className="border rounded-xl overflow-hidden bg-white">
+              <button onClick={() => setCollapsedSections(p => ({...p, revolving: !p.revolving}))} className="w-full p-4 bg-purple-50 flex justify-between font-bold text-purple-800">Revolving Credit {collapsedSections.revolving ? <ChevronDown/> : <ChevronUp/>}</button>
+              {!collapsedSections.revolving && <div className="p-4 space-y-3">{liabilities.filter(l => l.type === 'revolving').map(l => <div key={l.id} className="p-3 border rounded flex justify-between"><span>{l.name}</span><span>${l.currentBal}</span></div>)}</div>}
+           </div>
+           <div className="border rounded-xl overflow-hidden bg-white">
+              <button onClick={() => setCollapsedSections(p => ({...p, installment: !p.installment}))} className="w-full p-4 bg-blue-50 flex justify-between font-bold text-blue-800">Installment Loans {collapsedSections.installment ? <ChevronDown/> : <ChevronUp/>}</button>
+              {!collapsedSections.installment && <div className="p-4 space-y-3">{liabilities.filter(l => l.type === 'installment').map(l => <div key={l.id} className="p-3 border rounded flex justify-between"><span>{l.name}</span><span>${l.currentBal}</span></div>)}</div>}
+           </div>
         </div>
       </div>
-      
-      {/* Modal - keeping existing */}
       {chargeModalOpen && selectedLiability && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50 animate-in fade-in">
-          <Card className="w-full max-w-sm p-6 relative">
-            <button onClick={() => setChargeModalOpen(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X size={20} /></button>
-            <h3 className="text-lg font-bold text-slate-800 mb-4">Add Charge to {selectedLiability.name}</h3>
-            <div className="space-y-4">
-              <div><label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Date</label><input type="date" value={newCharge.date} onChange={e => setNewCharge({...newCharge, date: e.target.value})} className="w-full p-2 border rounded" /></div>
-              <div><label className="block text-xs font-semibold text-slate-500 uppercase mb-1">Amount</label><input type="number" placeholder="0.00" value={newCharge.amount} onChange={e => setNewCharge({...newCharge, amount: e.target.value})} className="w-full p-2 border rounded" /></div>
-              <Button onClick={handleConfirmCharge} className="w-full">Add to Balance</Button>
-            </div>
-          </Card>
-        </div>
-      )}
-    </div>
-  );
-
-  const renderIncome = () => (
-    <div className="space-y-6 animate-in fade-in">
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        
-        {/* Budget Cycle Config Card */}
-        <div className="lg:col-span-1 space-y-6">
-          <Card className="p-6 bg-blue-50 border-blue-200">
-            <div className="flex items-center gap-2 mb-4">
-              <Settings className="text-blue-600" size={20} />
-              <h3 className="font-bold text-slate-800">Budget Cycle</h3>
-            </div>
-            <p className="text-xs text-slate-500 mb-4">Define your current pay period to track which bills fall into this cycle.</p>
-            
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-semibold text-blue-700 uppercase mb-1">Start Date</label>
-                <input 
-                  type="date" 
-                  value={budgetConfig.startDate}
-                  onChange={e => setBudgetConfig({...budgetConfig, startDate: e.target.value})}
-                  className="w-full p-2 text-sm border border-blue-200 rounded"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-blue-700 uppercase mb-1">Frequency</label>
-                <select 
-                  value={budgetConfig.frequency}
-                  onChange={e => setBudgetConfig({...budgetConfig, frequency: e.target.value})}
-                  className="w-full p-2 text-sm border border-blue-200 rounded"
-                >
-                  <option value="weekly">Weekly (7 days)</option>
-                  <option value="bi-weekly">Bi-Weekly (14 days)</option>
-                  <option value="semi-monthly">Semi-Monthly (15 days)</option>
-                  <option value="monthly">Monthly (30 days)</option>
-                </select>
-              </div>
-              <div className="pt-2">
-                <p className="text-xs text-blue-600 font-medium mb-2">
-                  Current Window: <br/>
-                  <span className="text-slate-800">{currentBudgetCycle.start.toLocaleDateString()} — {currentBudgetCycle.end.toLocaleDateString()}</span>
-                </p>
-                <Button onClick={handleSaveBudgetConfig} className="w-full text-xs" variant="primary">Save Settings</Button>
-              </div>
-            </div>
-          </Card>
-
-          {/* Calibration Card (Existing) */}
-          <Card className="p-6 bg-slate-50 border-slate-200">
-            <div className="flex items-center gap-2 mb-4">
-              <History className="text-blue-600" size={20} />
-              <h3 className="font-bold text-slate-800">Calibration</h3>
-            </div>
-            {/* ...existing calibration form... */}
-            <form onSubmit={handleAddHistorical} className="space-y-3 mb-6">
-              <input name="date" type="date" required className="w-full p-2 text-sm border rounded" />
-              <div className="grid grid-cols-2 gap-2">
-                <input name="gross" type="number" step="0.01" placeholder="Gross Pay" required className="w-full p-2 text-sm border rounded" />
-                <input name="net" type="number" step="0.01" placeholder="Net Pay" required className="w-full p-2 text-sm border rounded" />
-              </div>
-              <Button className="w-full text-sm" type="submit" variant="secondary">Add Past Record</Button>
-            </form>
-            {/* ...existing stats... */}
-          </Card>
-        </div>
-
-        {/* Add Income Section (Existing) */}
-        <div className="lg:col-span-2 space-y-6">
-          <Card className="p-6 border-blue-100 shadow-md">
-            <div className="flex items-center gap-2 mb-6">
-              <DollarSign className="text-green-600" size={24} />
-              <h3 className="text-xl font-bold text-slate-800">2. Add Income</h3>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Source Name</label>
-                  <input type="text" placeholder="e.g. Tips, Uber, Shift A" value={newIncome.source} onChange={e => setNewIncome({...newIncome, source: e.target.value})} className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500" />
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                   <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Date Received</label>
-                      <input type="date" value={newIncome.date} onChange={e => setNewIncome({...newIncome, date: e.target.value})} className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500" />
-                   </div>
-                   <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Pay Period</label>
-                      <input type="text" placeholder="e.g. Oct 1-15" value={newIncome.payPeriod} onChange={e => setNewIncome({...newIncome, payPeriod: e.target.value})} className="w-full p-3 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500" />
-                   </div>
-                </div>
-              </div>
-              {/* ...amounts inputs... */}
-              <div className="space-y-4 bg-blue-50 p-4 rounded-xl border border-blue-100">
-                <div className="flex items-center justify-between mb-2">
-                  <label className="text-sm font-bold text-blue-800">Amounts</label>
-                  <div className="flex items-center gap-2">
-                    <input type="checkbox" id="autoCalc" checked={isAutoCalc} onChange={e => setIsAutoCalc(e.target.checked)} className="rounded text-blue-600 focus:ring-blue-500" />
-                    <label htmlFor="autoCalc" className="text-xs text-blue-600 cursor-pointer select-none">Auto-calculate Net</label>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1">Gross Amount</label>
-                  <input type="number" placeholder="0.00" value={newIncome.gross} onChange={handleGrossChange} className="w-full p-2 border border-slate-200 rounded-lg" />
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-500 mb-1">Net Amount</label>
-                  <input type="number" placeholder="0.00" value={newIncome.net} onChange={e => setNewIncome({...newIncome, net: e.target.value})} className="w-full p-2 border-2 border-green-500/30 rounded-lg font-bold text-slate-800" />
-                </div>
-              </div>
-            </div>
-            <div className="mt-6 flex justify-end">
-              <Button onClick={handleAddIncome} className="w-full md:w-auto"><Plus size={18} /> Add to Budget</Button>
-            </div>
-          </Card>
-
-          {/* Income Log */}
-          <div className="space-y-2">
-            <h4 className="font-semibold text-slate-700">Income Log</h4>
-            {incomes.map(inc => (
-              <div key={inc.id} className="flex justify-between items-center bg-white p-3 rounded-lg border border-slate-200 shadow-sm">
-                <div>
-                  <p className="font-medium text-slate-800">{inc.source}</p>
-                  <div className="flex gap-2 text-xs text-slate-500">
-                    <span>{inc.date}</span>
-                    {inc.payPeriod && <span className="bg-slate-100 px-1 rounded">Pd: {inc.payPeriod}</span>}
-                  </div>
-                </div>
-                <div className="flex items-center gap-4">
-                  <span className="font-bold text-green-600">+${inc.amount.toFixed(2)}</span>
-                  <button onClick={() => deleteItem('incomes', inc.id)} className="text-slate-400 hover:text-red-500"><Trash2 size={16} /></button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-
-  const renderParser = () => (
-    <div className="max-w-2xl mx-auto space-y-6 animate-in fade-in">
-      <div className="text-center mb-8">
-        <h2 className="text-2xl font-bold text-slate-800">Smart Bill Parser</h2>
-        <p className="text-slate-500">Paste text from an email, SMS, or digital receipt.</p>
-      </div>
-      <Card className="p-6">
-        <textarea
-          value={parseText}
-          onChange={(e) => setParseText(e.target.value)}
-          placeholder="Paste bill text here...&#10;Example:&#10;Payment to Comcast&#10;Amount: $89.99&#10;Date: Oct 24, 2023"
-          className="w-full h-40 p-4 border border-slate-200 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none font-mono text-sm bg-slate-50"
-        />
-        <div className="mt-4 flex gap-3 justify-end">
-          <Button onClick={parseBillText} variant="secondary">Standard Parse</Button>
-          <Button onClick={handleAiParse} variant="magic" disabled={aiParseLoading}>
-            {aiParseLoading ? <Loader2 className="animate-spin" /> : <><Sparkles size={16} /> Deep Parse with AI</>}
-          </Button>
-        </div>
-      </Card>
-      {parsedResult && (
-        <div className="animate-in fade-in slide-in-from-bottom-4">
-          <div className="flex items-center gap-2 mb-2 text-slate-700 font-medium">
-            <TrendingUp size={18} className="text-purple-600" />
-            <span>Extracted Details</span>
-          </div>
-          <Card className="p-6 bg-purple-50 border-purple-100">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-              <div>
-                <label className="block text-xs font-semibold text-purple-700 uppercase mb-1">Merchant</label>
-                <input type="text" value={parsedResult.name} onChange={(e) => setParsedResult({...parsedResult, name: e.target.value})} className="w-full p-2 border border-purple-200 rounded bg-white" />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-purple-700 uppercase mb-1">Amount</label>
-                <input type="number" value={parsedResult.amount} onChange={(e) => setParsedResult({...parsedResult, amount: e.target.value})} className="w-full p-2 border border-purple-200 rounded bg-white" />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-purple-700 uppercase mb-1">Date</label>
-                <input type="date" value={parsedResult.date} onChange={(e) => setParsedResult({...parsedResult, date: e.target.value})} className="w-full p-2 border border-purple-200 rounded bg-white" />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-purple-700 uppercase mb-1">Category</label>
-                <select value={parsedResult.category} onChange={(e) => setParsedResult({...parsedResult, category: e.target.value})} className="w-full p-2 border border-purple-200 rounded bg-white">
-                  <option>Utilities</option>
-                  <option>Rent/Mortgage</option>
-                  <option>Food</option>
-                  <option>Insurance</option>
-                  <option>Entertainment</option>
-                  <option>Uncategorized</option>
-                </select>
-              </div>
-            </div>
-            <div className="flex gap-3">
-              <Button onClick={confirmParsedBill} className="w-full bg-purple-600 hover:bg-purple-700"><Save size={18} /> Add to Budget</Button>
-              <Button onClick={() => setParsedResult(null)} variant="secondary">Cancel</Button>
-            </div>
-          </Card>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+           <Card className="w-full max-w-sm p-6 relative">
+              <button onClick={() => setChargeModalOpen(false)} className="absolute top-4 right-4"><X/></button>
+              <h3 className="font-bold mb-4">Add Charge</h3>
+              <input type="number" placeholder="Amount" value={newCharge.amount} onChange={e => setNewCharge({...newCharge, amount: e.target.value})} className="w-full p-2 border rounded mb-4"/>
+              <Button onClick={handleConfirmCharge} className="w-full">Add</Button>
+           </Card>
         </div>
       )}
     </div>
@@ -1225,120 +698,31 @@ export default function SmartBudgetApp() {
 
   const renderProfile = () => (
      <div className="max-w-md mx-auto space-y-6 animate-in fade-in">
-        <div className="text-center">
-           <div className="bg-blue-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4 text-blue-600">
-              <User size={40} />
-           </div>
-           <h2 className="text-2xl font-bold text-slate-800">User Profile</h2>
-           <p className="text-slate-500 mt-2">Welcome, {user?.displayName || 'User'}</p>
-        </div>
-        <Card className="p-6 space-y-4">
-           <div>
-              <label className="text-xs font-semibold text-slate-500 uppercase">Display Name</label>
-              <div className="flex gap-2">
-                 {isEditingProfile ? (
-                    <form onSubmit={handleUpdateProfileName} className="flex-1 flex gap-2">
-                      <input className="flex-1 p-2 border rounded text-sm" value={tempName} onChange={e => setTempName(e.target.value)} placeholder="Your Name" />
-                      <Button type="submit" className="text-xs">Save</Button>
-                      <Button variant="ghost" onClick={() => setIsEditingProfile(false)} className="text-xs">Cancel</Button>
-                    </form>
-                 ) : (
-                    <div className="flex-1 p-3 bg-slate-50 rounded border border-slate-200 text-sm font-medium text-slate-800 flex justify-between items-center">
-                      {displayName || 'Budget Owner'}
-                      <button onClick={() => { setTempName(displayName || ''); setIsEditingProfile(true); }} className="text-slate-400 hover:text-blue-600"><Edit2 size={14} /></button>
-                    </div>
-                 )}
-              </div>
-           </div>
-           <div>
-              <label className="text-xs font-semibold text-slate-500 uppercase">Account Email</label>
-              <div className="p-3 bg-slate-50 rounded border border-slate-200 text-sm font-medium text-slate-800">
-                 {user?.email || 'N/A (Google Sign-In)'}
-              </div>
-           </div>
-           <div>
-              <label className="text-xs font-semibold text-slate-500 uppercase">Data Security</label>
-              <div className="flex items-center gap-2 mt-1 text-green-600"><ShieldAlert size={16} /><span className="text-sm font-medium">Private Storage</span></div>
-              <p className="text-xs text-slate-400 mt-1">Your data is stored in a private collection linked only to your User ID.</p>
-           </div>
-           <div className="pt-4 border-t border-slate-100">
-             <Button onClick={handleLogout} variant="danger" className="w-full"><LogOut size={16} /> Logout</Button>
-           </div>
-        </Card>
+        <div className="text-center"><div className="bg-blue-100 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4 text-blue-600"><User size={40} /></div><h2 className="text-2xl font-bold">Profile</h2><p>{user?.displayName}</p></div>
+        <Card className="p-6"><Button onClick={handleLogout} variant="danger" className="w-full">Logout</Button></Card>
      </div>
   );
 
-  if (loading) {
-     return (
-        <div className="min-h-screen bg-slate-100 flex items-center justify-center">
-           <div className="animate-pulse flex flex-col items-center gap-4">
-              <div className="w-12 h-12 bg-blue-200 rounded-full"></div>
-              <div className="text-slate-400 font-medium">Loading SmartBudget...</div>
-           </div>
-        </div>
-     );
-  }
-
-  if (!user) return renderAuth();
+  if (loading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="animate-spin text-blue-600" /></div>;
+  if (!user) return <div className="min-h-screen flex items-center justify-center"><Card className="w-full max-w-md p-8"><h1 className="text-2xl font-bold mb-4 text-center">SmartBudget</h1><Button onClick={handleGoogleLogin} className="w-full" variant="google">Sign in with Google</Button><div className="my-4 text-center text-xs text-slate-400">OR</div><form onSubmit={handleEmailAuth} className="space-y-2"><input className="w-full p-2 border rounded" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)}/><input className="w-full p-2 border rounded" type="password" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)}/><Button type="submit" className="w-full">{authMode === 'login' ? 'Sign In' : 'Sign Up'}</Button></form><div className="mt-4 text-center text-xs text-blue-500 cursor-pointer" onClick={() => setAuthMode(authMode==='login'?'signup':'login')}>{authMode==='login'?'Create Account':'Have an account?'}</div></Card></div>;
 
   return (
-    <div className="min-h-screen bg-slate-100 font-sans text-slate-900 pb-20">
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
-        <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="bg-blue-600 p-2 rounded-lg text-white"><Calculator size={20} /></div>
-            <h1 className="font-bold text-xl hidden sm:block">SmartBudget</h1>
-          </div>
-          <nav className="flex gap-1 bg-slate-100 p-1 rounded-lg overflow-x-auto">
-            {['dashboard', 'income', 'bills', 'liabilities', 'parser', 'profile'].map((tab) => (
-              <button key={tab} onClick={() => setActiveTab(tab)} className={`px-3 py-1.5 text-sm font-medium rounded-md capitalize whitespace-nowrap transition-all flex items-center gap-2 ${activeTab === tab ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
-                {tab === 'profile' && <User size={14} />} {tab}
-              </button>
-            ))}
-          </nav>
-        </div>
-      </header>
-      <main className="max-w-5xl mx-auto px-4 py-8">
+    <div className="min-h-screen bg-slate-100 font-sans text-slate-900 pb-24">
+      <main className="max-w-5xl mx-auto px-4 py-6">
         {activeTab === 'dashboard' && renderDashboard()}
-        {activeTab === 'parser' && renderParser()}
+        {activeTab === 'bills' && renderParser()}
+        {activeTab === 'expenses' && renderExpenses()}
         {activeTab === 'income' && renderIncome()}
         {activeTab === 'liabilities' && renderLiabilities()}
         {activeTab === 'profile' && renderProfile()}
-        {activeTab === 'bills' && (
-          <div className="space-y-4 animate-in fade-in">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-2xl font-bold text-slate-800">Bills & Expenses</h2>
-              <Button onClick={() => setActiveTab('parser')} variant="secondary" className="text-sm"><Plus size={16} /> Add Bill</Button>
-            </div>
-            {bills.map(bill => (
-              <Card key={bill.id} className={`p-4 flex items-center justify-between transition-all ${bill.paid ? 'bg-slate-50 opacity-75' : ''}`}>
-                <div className="flex items-center gap-4">
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center text-xs font-bold ${bill.paid ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'}`}>
-                    {bill.paid ? <CheckCircle size={16}/> : bill.date.split('-')[2]}
-                  </div>
-                  <div>
-                    <h4 className={`font-bold ${bill.paid ? 'text-slate-500 line-through' : 'text-slate-800'}`}>{bill.name}</h4>
-                    <p className="text-sm text-slate-500">{bill.category}</p>
-                  </div>
-                </div>
-                <div className="text-right flex items-center gap-3">
-                  <div className="text-right">
-                    <p className={`font-bold ${bill.paid ? 'text-slate-400' : 'text-slate-800'}`}>-${bill.amount.toFixed(2)}</p>
-                    <button onClick={() => deleteItem('bills', bill.id)} className="text-xs text-red-500 hover:underline mt-1">Remove</button>
-                  </div>
-                  <button 
-                    onClick={() => toggleBillPaid(bill)}
-                    className={`p-2 rounded-lg transition-colors ${bill.paid ? 'bg-green-100 text-green-600' : 'bg-slate-100 text-slate-400 hover:bg-slate-200'}`}
-                  >
-                    {bill.paid ? <CheckSquare size={20} /> : <Square size={20} />}
-                  </button>
-                </div>
-              </Card>
-            ))}
-            {bills.length === 0 && <p className="text-center text-slate-500 py-10">No bills tracked yet.</p>}
-          </div>
-        )}
       </main>
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t px-4 py-2 z-50">
+        <div className="max-w-md mx-auto flex justify-between items-center">
+          {[{ id: 'dashboard', icon: <TrendingUp size={20} />, label: 'Dash' }, { id: 'bills', icon: <Receipt size={20} />, label: 'Bills' }, { id: 'expenses', icon: <DollarSign size={20} />, label: 'Spend' }, { id: 'income', icon: <Landmark size={20} />, label: 'Income' }, { id: 'liabilities', icon: <CreditCard size={20} />, label: 'Debt' }, { id: 'profile', icon: <User size={20} />, label: 'Profile' }].map(tab => (
+            <button key={tab.id} onClick={() => setActiveTab(tab.id)} className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-all ${activeTab === tab.id ? 'text-blue-600 bg-blue-50' : 'text-slate-400'}`}>{tab.icon}<span className="text-[10px] font-medium">{tab.label}</span></button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
