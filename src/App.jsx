@@ -66,8 +66,7 @@ const firebaseConfig = typeof __firebase_config !== 'undefined'
   messagingSenderId: "38995285066",
   appId: "1:38995285066:web:540cfa83f44bbca6d202b3",
   measurementId: "G-2SHPJKS224"
-}
-;
+};
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -164,6 +163,8 @@ export default function SmartBudgetApp() {
   const [liabilities, setLiabilities] = useState([]);
   const [expenses, setExpenses] = useState([]); 
   const [historicalPaychecks, setHistoricalPaychecks] = useState([]);
+  
+  // Default budget config with safe defaults
   const [budgetConfig, setBudgetConfig] = useState({ 
     startDate: new Date().toISOString().split('T')[0], 
     frequency: 'bi-weekly', 
@@ -229,6 +230,12 @@ export default function SmartBudgetApp() {
     description: '' 
   });
 
+  // --- Profile Data ---
+  const [displayName, setDisplayName] = useState('');
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [tempName, setTempName] = useState('');
+  const [debugStats, setDebugStats] = useState({ loaded: 0, matched: 0 });
+
   // --- Auth & Sync ---
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (u) => {
@@ -244,6 +251,9 @@ export default function SmartBudgetApp() {
       const q = collection(db, 'artifacts', appId, 'users', user.uid, collectionName);
       return onSnapshot(q, (snapshot) => {
         const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        if (collectionName === 'incomes') { 
+            setDebugStats(prev => ({ ...prev, loaded: data.length }));
+        }
         data.sort((a, b) => {
            if (a.date && b.date) return new Date(b.date) - new Date(a.date);
            return 0;
@@ -340,12 +350,14 @@ export default function SmartBudgetApp() {
     if (historicalPaychecks.length === 0) return { rate: 0, label: '0%' };
     const totalGross = historicalPaychecks.reduce((acc, curr) => acc + Number(curr.gross), 0);
     const totalNet = historicalPaychecks.reduce((acc, curr) => acc + Number(curr.net), 0);
+    if(totalGross === 0) return { rate: 0, label: '0%' };
     const rate = 1 - (totalNet / totalGross);
     return { rate, label: `${(rate * 100).toFixed(1)}%` };
   }, [historicalPaychecks]);
 
   // --- Helper for Date Display without Timezone Shift ---
   const formatLocalDate = (dateObj) => {
+    if (!dateObj || isNaN(dateObj.getTime())) return "Invalid Date";
     const y = dateObj.getFullYear();
     const m = String(dateObj.getMonth() + 1).padStart(2, '0');
     const d = String(dateObj.getDate()).padStart(2, '0');
@@ -354,8 +366,13 @@ export default function SmartBudgetApp() {
 
   // --- Intelligent Pay Cycle Logic ---
   const calculatedCycle = useMemo(() => {
+    // Safety check for missing start date
+    if (!budgetConfig.startDate) return { start: new Date(), end: new Date(), payDate: new Date() };
+
     // Force local date parsing
     const parts = budgetConfig.startDate.split('-');
+    if (parts.length !== 3) return { start: new Date(), end: new Date(), payDate: new Date() };
+
     // new Date(year, monthIndex, day) creates a local date at 00:00:00
     const start = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
     
@@ -373,13 +390,14 @@ export default function SmartBudgetApp() {
     const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
     
     // Calculate how many full cycles have passed
+    // If diffDays is negative (future start date), cyclesPassed will be negative, which is fine
     const cyclesPassed = Math.floor(diffDays / freqDays);
     
     // Current cycle start is StartDate + (CyclesPassed * Frequency)
     let currentStart = new Date(start);
     currentStart.setDate(start.getDate() + (cyclesPassed * freqDays));
     
-    // If calculated start is in future (rare edge case), pull back
+    // If calculated start is in future (rare edge case with floor/ceil), pull back
     if (currentStart > today) {
        currentStart.setDate(currentStart.getDate() - freqDays);
     }
@@ -387,7 +405,6 @@ export default function SmartBudgetApp() {
     const currentEnd = new Date(currentStart);
     currentEnd.setDate(currentStart.getDate() + freqDays - 1);
     
-    // Default pay date logic (e.g. user set custom date or we infer end of cycle)
     const predictedPayDate = budgetConfig.payDate ? new Date(budgetConfig.payDate) : new Date(currentEnd); 
 
     return { 
@@ -404,11 +421,10 @@ export default function SmartBudgetApp() {
         const pStart = formatLocalDate(calculatedCycle.start);
         const pEnd = formatLocalDate(calculatedCycle.end);
         
-        // Suggest Pay Date if set, otherwise cycle end
         let pDate = pEnd;
         if (budgetConfig.payDate) {
-             // Logic to find next pay date occurrence could go here, 
-             // but keeping it simple to cycle end for now to avoid complexity
+             // Logic to find next pay date occurrence could go here
+             // For now defaulting to cycle end date as sensible default
              pDate = pEnd;
         }
         
@@ -658,7 +674,6 @@ export default function SmartBudgetApp() {
          <Card className="p-4"><p className="text-xs font-bold text-slate-500">REMAINING</p><h3 className={`text-xl font-bold ${remaining>=0?'text-blue-600':'text-orange-600'}`}>${remaining.toLocaleString()}</h3></Card>
       </div>
 
-      {/* Restored: Recent Bills & Expenses */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <Card className="p-6">
            <h4 className="font-bold mb-4 flex items-center gap-2 text-slate-700"><Receipt size={18}/> Recent Bills</h4>
@@ -851,63 +866,106 @@ export default function SmartBudgetApp() {
      </div>
   );
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="animate-spin text-blue-600" /></div>;
-  if (!user) return (
-     <div className="min-h-screen flex items-center justify-center bg-slate-100 p-4">
-        <Card className="w-full max-w-md p-8">
-           <div className="text-center mb-6"><div className="bg-blue-100 w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 text-blue-600"><Key size={32}/></div><h1 className="text-2xl font-bold">SmartBudget</h1></div>
-           <Button onClick={handleGoogleLogin} className="w-full mb-4" variant="google">Sign in with Google</Button>
-           <div className="text-center text-xs text-slate-400 mb-4">OR EMAIL</div>
-           <form onSubmit={handleEmailAuth} className="space-y-3">
-              {authMode==='signup' && <input placeholder="Name" value={fullName} onChange={e=>setFullName(e.target.value)} className="w-full p-2 border rounded"/>}
-              <input placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)} className="w-full p-2 border rounded"/>
-              <input type="password" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)} className="w-full p-2 border rounded"/>
-              <Button type="submit" className="w-full">{authMode==='login'?'Login':'Sign Up'}</Button>
-           </form>
-           <p className="text-center text-xs text-blue-500 mt-4 cursor-pointer" onClick={()=>setAuthMode(authMode==='login'?'signup':'login')}>{authMode==='login'?'Create Account':'Have account?'}</p>
-        </Card>
-     </div>
-  );
-
-  return (
-    <div className="min-h-screen bg-slate-100 font-sans text-slate-900 pb-24">
-      {/* Top Nav */}
-      <header className="bg-white border-b sticky top-0 z-10 hidden md:block">
-         <div className="max-w-5xl mx-auto px-4 h-16 flex justify-between items-center">
-            <div className="flex items-center gap-2 text-blue-600 font-bold text-xl"><Calculator/> SmartBudget</div>
-            <nav className="flex gap-1">{['dashboard','income','bills','expenses','liabilities','profile'].map(t => <button key={t} onClick={()=>setActiveTab(t)} className={`px-4 py-2 capitalize rounded ${activeTab===t?'bg-blue-50 text-blue-600':''}`}>{t}</button>)}</nav>
-         </div>
-      </header>
-
-      <main className="max-w-5xl mx-auto px-4 py-6">
-         {activeTab === 'dashboard' && renderDashboard()}
-         {activeTab === 'income' && renderIncome()}
-         {activeTab === 'liabilities' && renderLiabilities()}
-         {activeTab === 'bills' && renderParser()}
-         {activeTab === 'expenses' && renderExpenses()}
-         {activeTab === 'profile' && renderProfile()}
-      </main>
-
-      {/* Bottom Nav */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t px-4 py-2 z-50 md:hidden">
-        <div className="max-w-md mx-auto flex justify-between">
-           {[{id:'dashboard', i:<TrendingUp/>}, {id:'bills', i:<Receipt/>}, {id:'expenses', i:<DollarSign/>}, {id:'income', i:<Landmark/>}, {id:'liabilities', i:<CreditCard/>}, {id:'profile', i:<User/>}].map(t => (
-              <button key={t.id} onClick={()=>setActiveTab(t.id)} className={`p-2 rounded ${activeTab===t.id?'text-blue-600':'text-slate-400'}`}>{t.i}</button>
-           ))}
+  const renderIncome = () => (
+    <div className="space-y-6 animate-in fade-in">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-1 space-y-6">
+          <Card className="p-6 bg-blue-50 border-blue-200">
+            <div className="flex items-center gap-2 mb-4"><Settings className="text-blue-600" size={20} /><h3 className="font-bold text-slate-800">Budget Cycle</h3></div>
+            <div className="space-y-3">
+              <div><label className="text-xs font-bold uppercase text-blue-700">Start Date</label><input type="date" value={budgetConfig.startDate} onChange={e => setBudgetConfig({...budgetConfig, startDate: e.target.value})} className="w-full p-2 border rounded" /></div>
+              <div><label className="text-xs font-bold uppercase text-blue-700">Pay Date</label><input type="date" value={budgetConfig.payDate} onChange={e => setBudgetConfig({...budgetConfig, payDate: e.target.value})} className="w-full p-2 border rounded" /></div>
+              <div><label className="text-xs font-bold uppercase text-blue-700">Frequency</label><select value={budgetConfig.frequency} onChange={e => setBudgetConfig({...budgetConfig, frequency: e.target.value})} className="w-full p-2 border rounded"><option value="weekly">Weekly</option><option value="bi-weekly">Bi-Weekly</option><option value="monthly">Monthly</option></select></div>
+              <Button onClick={handleSaveBudgetConfig} className="w-full text-xs">Save Settings</Button>
+            </div>
+          </Card>
+          <Card className="p-6 bg-slate-50 border-slate-200">
+             <h3 className="font-bold mb-4">Calibration</h3>
+             <form onSubmit={handleAddHistorical} className="space-y-2"><input name="gross" placeholder="Gross" className="w-full p-2 border rounded"/><input name="net" placeholder="Net" className="w-full p-2 border rounded"/><Button type="submit" className="w-full">Add History</Button></form>
+          </Card>
+        </div>
+        <div className="lg:col-span-2 space-y-6">
+           <Card className="p-6 border-blue-100 shadow-md">
+              <h3 className="text-xl font-bold mb-4">Add Income</h3>
+              <div className="space-y-4">
+                 <input placeholder="Source" value={newIncome.source} onChange={e => setNewIncome({...newIncome, source: e.target.value})} className="w-full p-3 border rounded"/>
+                 <div className="grid grid-cols-2 gap-4"><input type="number" placeholder="Gross" value={newIncome.gross} onChange={handleGrossChange} className="p-3 border rounded"/><input type="number" placeholder="Net" value={newIncome.net} onChange={e => setNewIncome({...newIncome, net: e.target.value})} className="p-3 border rounded"/></div>
+                 <Button onClick={handleAddIncome} className="w-full">Add Income</Button>
+              </div>
+           </Card>
+           <div className="space-y-2">{incomes.map(i => <div key={i.id} className="flex justify-between p-3 bg-white border rounded"><span>{i.source}</span><span>${i.amount}</span><button onClick={() => deleteItem('incomes', i.id)}><Trash2 size={16} /></button></div>)}</div>
         </div>
       </div>
-      
-      {/* Charge Modal */}
-      {chargeModalOpen && (
+    </div>
+  );
+
+  const renderLiabilities = () => (
+    <div className="space-y-6 animate-in fade-in">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-1">
+          <Card className="p-5 bg-slate-50 border-slate-200 sticky top-4">
+            <h3 className="font-bold text-slate-800 mb-4">Add Liability</h3>
+            <div className="space-y-3">
+               <div className="flex bg-white rounded p-1 border"><button onClick={() => setNewLiability({...newLiability, type: 'revolving'})} className={`flex-1 py-1 rounded ${newLiability.type === 'revolving' ? 'bg-purple-100' : ''}`}>Card</button><button onClick={() => setNewLiability({...newLiability, type: 'installment'})} className={`flex-1 py-1 rounded ${newLiability.type === 'installment' ? 'bg-blue-100' : ''}`}>Loan</button></div>
+               <input placeholder="Name" value={newLiability.name} onChange={e => setNewLiability({...newLiability, name: e.target.value})} className="w-full p-2 border rounded"/>
+               <input type="number" placeholder="Current Balance" value={newLiability.currentBal} onChange={e => setNewLiability({...newLiability, currentBal: e.target.value})} className="w-full p-2 border rounded"/>
+               <input type="number" placeholder="Min Payment" value={newLiability.minPayment} onChange={e => setNewLiability({...newLiability, minPayment: e.target.value})} className="w-full p-2 border rounded"/>
+               <Button onClick={handleAddLiability} className="w-full">Add Liability</Button>
+            </div>
+          </Card>
+        </div>
+        <div className="lg:col-span-2 space-y-4">
+           <div className="border rounded-xl overflow-hidden bg-white">
+              <button onClick={() => setCollapsedSections(p => ({...p, revolving: !p.revolving}))} className="w-full p-4 bg-purple-50 flex justify-between font-bold text-purple-800">Revolving Credit {collapsedSections.revolving ? <ChevronDown/> : <ChevronUp/>}</button>
+              {!collapsedSections.revolving && <div className="p-4 space-y-3">{liabilities.filter(l => l.type === 'revolving').map(l => <div key={l.id} className="p-3 border rounded flex justify-between"><span>{l.name}</span><span>${l.currentBal}</span></div>)}</div>}
+           </div>
+           <div className="border rounded-xl overflow-hidden bg-white">
+              <button onClick={() => setCollapsedSections(p => ({...p, installment: !p.installment}))} className="w-full p-4 bg-blue-50 flex justify-between font-bold text-blue-800">Installment Loans {collapsedSections.installment ? <ChevronDown/> : <ChevronUp/>}</button>
+              {!collapsedSections.installment && <div className="p-4 space-y-3">{liabilities.filter(l => l.type === 'installment').map(l => <div key={l.id} className="p-3 border rounded flex justify-between"><span>{l.name}</span><span>${l.currentBal}</span></div>)}</div>}
+           </div>
+        </div>
+      </div>
+      {chargeModalOpen && selectedLiability && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
            <Card className="w-full max-w-sm p-6 relative">
-              <button onClick={()=>setChargeModalOpen(false)} className="absolute top-4 right-4"><X/></button>
+              <button onClick={() => setChargeModalOpen(false)} className="absolute top-4 right-4"><X/></button>
               <h3 className="font-bold mb-4">Add Charge</h3>
-              <input type="number" placeholder="Amount" value={newCharge.amount} onChange={e=>setNewCharge({...newCharge, amount:e.target.value})} className="w-full p-2 border rounded mb-4"/>
+              <input type="number" placeholder="Amount" value={newCharge.amount} onChange={e => setNewCharge({...newCharge, amount: e.target.value})} className="w-full p-2 border rounded mb-4"/>
               <Button onClick={handleConfirmCharge} className="w-full">Add</Button>
            </Card>
         </div>
       )}
+    </div>
+  );
+
+  if (loading) return <div className="min-h-screen flex items-center justify-center"><Loader2 className="animate-spin text-blue-600" /></div>;
+  if (!user) return <div className="min-h-screen flex items-center justify-center"><Card className="w-full max-w-md p-8"><h1 className="text-2xl font-bold mb-4 text-center">SmartBudget</h1><Button onClick={handleGoogleLogin} className="w-full" variant="google">Sign in with Google</Button><div className="my-4 text-center text-xs text-slate-400">OR</div><form onSubmit={handleEmailAuth} className="space-y-2"><input className="w-full p-2 border rounded" placeholder="Email" value={email} onChange={e=>setEmail(e.target.value)}/><input className="w-full p-2 border rounded" type="password" placeholder="Password" value={password} onChange={e=>setPassword(e.target.value)}/><Button type="submit" className="w-full">{authMode === 'login' ? 'Sign In' : 'Sign Up'}</Button></form><div className="mt-4 text-center text-xs text-blue-500 cursor-pointer" onClick={() => setAuthMode(authMode==='login'?'signup':'login')}>{authMode==='login'?'Create Account':'Have an account?'}</div></Card></div>;
+
+  return (
+    <div className="min-h-screen bg-slate-100 font-sans text-slate-900 pb-24">
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
+        <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="bg-blue-600 p-2 rounded-lg text-white"><Calculator size={20} /></div>
+            <h1 className="font-bold text-xl hidden sm:block">SmartBudget</h1>
+          </div>
+          <nav className="flex gap-1 bg-slate-100 p-1 rounded-lg overflow-x-auto">
+            {['dashboard', 'income', 'bills', 'liabilities', 'parser', 'profile'].map((tab) => (
+              <button key={tab} onClick={() => setActiveTab(tab)} className={`px-3 py-1.5 text-sm font-medium rounded-md capitalize whitespace-nowrap transition-all flex items-center gap-2 ${activeTab === tab ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
+                {tab === 'profile' && <User size={14} />} {tab === 'bills' ? 'Add Bills' : tab}
+              </button>
+            ))}
+          </nav>
+        </div>
+      </header>
+      <main className="max-w-5xl mx-auto px-4 py-8">
+        {activeTab === 'dashboard' && renderDashboard()}
+        {activeTab === 'bills' && renderParser()}
+        {activeTab === 'income' && renderIncome()}
+        {activeTab === 'liabilities' && renderLiabilities()}
+        {activeTab === 'expenses' && renderExpenses()}
+        {activeTab === 'profile' && renderProfile()}
+      </main>
     </div>
   );
 }
