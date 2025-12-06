@@ -72,7 +72,7 @@ const callGemini = async (prompt) => {
   // NOTE FOR DEPLOYMENT: 
   // In your local VS Code project, CHANGE this line to: 
   // const apiKey = import.meta.env.VITE_GEMINI_KEY;
-  const apiKey = import.meta.env.VITE_GEMINI_KEY; 
+  const apiKey = import.meta.env.VITE_GEMINI_KEY ; 
   
   try {
     const response = await fetch(
@@ -888,7 +888,7 @@ export default function SmartBudgetApp() {
         </div>
 
         <div className="lg:col-span-2 space-y-6">
-          {/* Liabilities Lists - Same as before but with check logic */}
+          {/* Revolving */}
           <div>
             <h3 className="font-bold text-purple-800 mb-3 flex items-center gap-2">
               <CreditCard size={20} /> Revolving Credit
@@ -954,8 +954,56 @@ export default function SmartBudgetApp() {
             </div>
           </div>
           
-          {/* Installment - similar update for paid toggle */}
-          {/* ... (skipping repetition for brevity, but logic is same) */}
+          {/* Installment Loans Section */}
+          <div>
+            <h3 className="font-bold text-blue-800 mb-3 flex items-center gap-2">
+              <History size={20} /> Installment Loans
+            </h3>
+            <div className="space-y-3">
+              {liabilities.filter(l => l.type === 'installment').map(debt => {
+                const { start, end } = currentBudgetCycle;
+                let isPaid = false;
+                if (debt.lastPaymentDate) {
+                   const pd = new Date(debt.lastPaymentDate);
+                   if (pd >= start && pd <= end) isPaid = true;
+                }
+
+                return (
+                  <Card key={debt.id} className={`p-4 border-l-4 ${isPaid ? 'border-l-green-400 bg-slate-50' : 'border-l-blue-400'} transition-all`}>
+                     <div className="flex justify-between items-start mb-2">
+                        <div>
+                          <h4 className="font-bold text-slate-800 flex items-center gap-2">
+                            {debt.name}
+                            {isPaid && <span className="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full flex items-center gap-1"><CheckCircle size={10} /> Paid</span>}
+                          </h4>
+                          <span className="text-xs text-slate-500">APR: {debt.apr}%</span>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-xl font-bold text-slate-800">${debt.currentBal.toFixed(2)}</div>
+                          <div className="text-xs text-slate-500">Remaining Principal</div>
+                        </div>
+                      </div>
+                      <div className="flex justify-between items-center bg-slate-50 p-2 rounded text-xs">
+                        <span className="text-slate-600">Monthly Payment: <span className="font-bold text-red-600">${debt.minPayment.toFixed(2)}</span></span>
+                        <span className="text-slate-600 flex items-center gap-1"><AlertCircle size={10}/> Due Day: {debt.dueDay || 'N/A'}</span>
+                      </div>
+                       <div className="mt-2 flex justify-end items-center gap-2 border-t border-slate-100 pt-2">
+                        <button 
+                          onClick={() => toggleLiabilityPaid(debt)}
+                          className={`text-xs flex items-center gap-1 px-3 py-1.5 rounded border transition-colors ${isPaid ? 'bg-green-50 text-green-700 border-green-200' : 'bg-slate-50 text-slate-600 border-slate-200'}`}
+                        >
+                          {isPaid ? <CheckSquare size={14}/> : <Square size={14}/>} {isPaid ? 'Paid' : 'Mark Paid'}
+                        </button>
+                        <button onClick={() => deleteItem('liabilities', debt.id)} className="text-xs text-red-400 hover:text-red-600 flex items-center gap-1">
+                          <Trash2 size={12} /> Remove
+                        </button>
+                      </div>
+                  </Card>
+                );
+              })}
+               {liabilities.filter(l => l.type === 'installment').length === 0 && <p className="text-sm text-slate-400 italic">No installment loans.</p>}
+            </div>
+          </div>
         </div>
       </div>
       
