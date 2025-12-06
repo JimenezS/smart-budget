@@ -77,7 +77,7 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 // --- API Helper ---
 const callGemini = async (prompt, imageBase64 = null) => {
   // *** DEPLOYMENT STEP: UNCOMMENT THE LINE BELOW IN VS CODE ***
-  const apiKey = import.meta.env.VITE_GEMINI_KEY;
+   const apiKey = import.meta.env.VITE_GEMINI_KEY;
   
   // Keep this empty string for the preview to load without errors
  // const apiKey = ""; 
@@ -966,7 +966,7 @@ export default function SmartBudgetApp() {
             <h1 className="font-bold text-xl hidden sm:block">SmartBudget</h1>
           </div>
           <nav className="flex gap-1 bg-slate-100 p-1 rounded-lg overflow-x-auto">
-            {['dashboard', 'income', 'bills', 'liabilities', 'parser', 'profile'].map((tab) => (
+            {['dashboard', 'income', 'bills', 'expenses', 'liabilities', 'profile'].map((tab) => (
               <button key={tab} onClick={() => setActiveTab(tab)} className={`px-3 py-1.5 text-sm font-medium rounded-md capitalize whitespace-nowrap transition-all flex items-center gap-2 ${activeTab === tab ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
                 {tab === 'profile' && <User size={14} />} {tab === 'bills' ? 'Add Bills' : tab}
               </button>
