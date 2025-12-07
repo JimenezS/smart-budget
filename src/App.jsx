@@ -44,7 +44,8 @@ import {
   CalendarDays,
   Banknote,
   Phone,
-  Wallet
+  Wallet,
+  Bell
 } from 'lucide-react';
 import { initializeApp } from "firebase/app";
 import { 
@@ -83,7 +84,7 @@ const callGemini = async (prompt, imageBase64 = null) => {
   const apiKey = import.meta.env.VITE_GEMINI_KEY;
   
   // Keep this empty string for the preview to load without errors
- // const apiKey = ""; 
+  //const apiKey = ""; 
   
   try {
     const parts = [{ text: prompt }];
@@ -237,7 +238,7 @@ export default function SmartBudgetApp() {
     description: '' 
   });
   const [paymentConfig, setPaymentConfig] = useState({
-    type: 'custom', // 'statement', 'full', 'custom'
+    type: 'custom', // 'statement', 'full', 'monthly', 'custom'
     amount: ''
   });
 
@@ -537,6 +538,27 @@ export default function SmartBudgetApp() {
     };
   }, [bills, liabilities, calculatedCycle]);
 
+  // --- 3-Day Alerts Logic (New) ---
+  const urgentAlerts = useMemo(() => {
+     const today = new Date();
+     const threeDaysOut = new Date();
+     threeDaysOut.setDate(today.getDate() + 3);
+     today.setHours(0,0,0,0);
+     threeDaysOut.setHours(23,59,59,999);
+
+     // Combine lists but filter closer
+     return [...categorizedObligations.overdue, ...categorizedObligations.current].filter(item => {
+        if(item.paid) return false; // Already handled
+        
+        // Parse date
+        const parts = item.dueDateDisplay.split('-');
+        const due = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+        
+        // Is overdue (already caught by overdue list but double check) OR within 3 days
+        return due <= threeDaysOut;
+     });
+  }, [categorizedObligations]);
+
   // --- Handlers ---
   
   const handleAddHistorical = (e) => { 
@@ -685,7 +707,12 @@ export default function SmartBudgetApp() {
   // --- Payment Modal Handlers ---
   const openPaymentModal = (liability) => {
     setSelectedLiability(liability);
-    setPaymentConfig({ type: 'statement', amount: '' });
+    // Set default payment based on type
+    if (liability.type === 'installment') {
+        setPaymentConfig({ type: 'monthly', amount: liability.minPayment });
+    } else {
+        setPaymentConfig({ type: 'statement', amount: '' });
+    }
     setPaymentModalOpen(true);
   };
 
@@ -695,6 +722,7 @@ export default function SmartBudgetApp() {
     let payAmount = 0;
     if (paymentConfig.type === 'statement') payAmount = parseFloat(selectedLiability.statementBal || 0);
     else if (paymentConfig.type === 'full') payAmount = parseFloat(selectedLiability.currentBal || 0);
+    else if (paymentConfig.type === 'monthly') payAmount = parseFloat(selectedLiability.minPayment || 0);
     else payAmount = parseFloat(paymentConfig.amount || 0);
 
     if (payAmount <= 0) {
@@ -723,6 +751,23 @@ export default function SmartBudgetApp() {
 
   const renderDashboard = () => (
     <div className="space-y-6 animate-in fade-in">
+      
+      {/* 3-Day Alert Banner */}
+      {urgentAlerts.length > 0 && (
+         <div className="bg-red-50 border-l-4 border-red-500 p-4 rounded-r-lg shadow-sm animate-in slide-in-from-top-2">
+            <h4 className="text-red-700 font-bold flex items-center gap-2 mb-2">
+               <Bell className="animate-bounce" size={20}/> Urgent Alerts
+            </h4>
+            <div className="space-y-1">
+               {urgentAlerts.map((item, idx) => (
+                  <div key={idx} className="text-sm text-red-600">
+                     • <b>{item.name}</b> is due {item.dueDateDisplay === new Date().toISOString().split('T')[0] ? 'TODAY' : `on ${item.dueDateDisplay}`}!
+                  </div>
+               ))}
+            </div>
+         </div>
+      )}
+
       <Card className="p-6 border-l-4 border-l-purple-500 bg-purple-50">
         <div className="flex justify-between items-start">
            <div className="flex gap-4"><div className="p-3 bg-purple-200 rounded-full text-purple-700"><Sparkles size={24}/></div><div><h3 className="font-bold text-slate-800">AI Advisor</h3><p className="text-sm text-slate-600">{aiAdvice || "Get insights."}</p></div></div>
@@ -972,7 +1017,7 @@ export default function SmartBudgetApp() {
            </div>
            
            <div className="pt-4 border-t border-slate-100">
-             <Button onClick={handleLogout} variant="danger" className="w-full"><LogOut size={16} /> Logout</Button>
+             <Button onClick={handleLogout} variant="danger" className="w-full"><LogOut size={16} /> Logout / Switch Budget</Button>
            </div>
         </Card>
      </div>
@@ -1051,84 +1096,100 @@ export default function SmartBudgetApp() {
         <div className="lg:col-span-2 space-y-4">
            <div className="border rounded-xl overflow-hidden bg-white">
               <button onClick={() => setCollapsedSections(p => ({...p, revolving: !p.revolving}))} className="w-full p-4 bg-purple-50 flex justify-between font-bold text-purple-800">Revolving Credit {collapsedSections.revolving ? <ChevronDown/> : <ChevronUp/>}</button>
-              {!collapsedSections.revolving && <div className="p-4 space-y-3">{liabilities.filter(l => l.type === 'revolving').map(l => (
-                <Card key={l.id} className="p-4 border-l-4 border-l-purple-400">
-                    <div className="flex justify-between items-start mb-3">
-                      <div>
-                        <h4 className="font-bold text-slate-800 flex items-center gap-2">
-                          {l.name}
-                        </h4>
-                        <div className="flex gap-2 text-xs text-slate-500 mt-1">
-                          <span className="flex items-center gap-1"><Calendar size={10} /> Close Day: {l.closingDay || 'N/A'}</span>
-                          <span className="flex items-center gap-1"><AlertCircle size={10} /> Due Day: {l.dueDay || 'N/A'}</span>
+              {!collapsedSections.revolving && <div className="p-4 space-y-3">{liabilities.filter(l => l.type === 'revolving').map(l => {
+                  const { start, end } = currentBudgetCycle;
+                  let isPaid = false;
+                  if (l.lastPaymentDate) {
+                     const pd = new Date(l.lastPaymentDate);
+                     if (pd >= start && pd <= end) isPaid = true;
+                  }
+                  return (
+                    <Card key={l.id} className={`p-4 border-l-4 ${isPaid ? 'border-l-green-400 bg-slate-50' : 'border-l-purple-400'} transition-all`}>
+                        <div className="flex justify-between items-start mb-3">
+                          <div>
+                            <h4 className="font-bold text-slate-800 flex items-center gap-2">
+                              {l.name}
+                              {isPaid && <span className="bg-green-100 text-green-700 text-xs px-2 py-0.5 rounded-full flex items-center gap-1"><CheckCircle size={10} /> Paid</span>}
+                            </h4>
+                            <div className="flex gap-2 text-xs text-slate-500 mt-1">
+                              <span className="flex items-center gap-1"><Calendar size={10} /> Close Day: {l.closingDay || 'N/A'}</span>
+                              <span className="flex items-center gap-1"><AlertCircle size={10} /> Due Day: {l.dueDay || 'N/A'}</span>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-2xl font-bold text-slate-800">${l.currentBal}</div>
+                            <div className="text-xs text-slate-500">Current Balance</div>
+                          </div>
                         </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-2xl font-bold text-slate-800">${l.currentBal}</div>
-                        <div className="text-xs text-slate-500">Current Balance</div>
-                      </div>
-                    </div>
-                    {/* ... grid of details ... */}
-                    <div className="grid grid-cols-3 gap-2 bg-white/50 p-3 rounded-lg text-xs">
-                      <div><p className="text-slate-500">Statement</p><p className="font-semibold">${l.statementBal}</p></div>
-                      <div><p className="text-slate-500">New Charges</p><p className="font-semibold text-orange-600">+${Math.max(0, l.currentBal - l.statementBal).toFixed(2)}</p></div>
-                      <div><p className="text-slate-500">Min Pay</p><p className="font-semibold text-red-600">${l.minPayment}</p></div>
-                    </div>
-                    
-                    <div className="mt-4 flex gap-2 justify-end items-center border-t border-slate-100 pt-3">
-                      <Button onClick={() => openPaymentModal(l)} className="px-3 py-1.5 text-xs bg-green-600 hover:bg-green-700 text-white">
-                         <Banknote size={14} /> Pay
-                      </Button>
-                      <div className="h-4 w-px bg-slate-200 mx-1"></div>
-                      <Button onClick={() => openChargeModal(l)} variant="secondary" className="px-3 py-1.5 text-xs">
-                         <Plus size={14} /> Charge
-                      </Button>
-                      <Button onClick={() => handleCloseStatement(l)} variant="outline" className="px-3 py-1.5 text-xs text-purple-700 border-purple-200 bg-purple-50 hover:bg-purple-100">
-                         <RefreshCw size={14} /> Close Stmt
-                      </Button>
-                      <button onClick={() => deleteItem('liabilities', l.id)} className="text-xs text-red-400 hover:text-red-600 flex items-center gap-1 px-2">
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                </Card>
-              ))}</div>}
+                        {/* ... grid of details ... */}
+                        <div className="grid grid-cols-3 gap-2 bg-white/50 p-3 rounded-lg text-xs">
+                          <div><p className="text-slate-500">Statement</p><p className="font-semibold">${l.statementBal}</p></div>
+                          <div><p className="text-slate-500">New Charges</p><p className="font-semibold text-orange-600">+${Math.max(0, l.currentBal - l.statementBal).toFixed(2)}</p></div>
+                          <div><p className="text-slate-500">Min Pay</p><p className="font-semibold text-red-600">${l.minPayment}</p></div>
+                        </div>
+                        
+                        <div className="mt-4 flex gap-2 justify-end items-center border-t border-slate-100 pt-3">
+                          <Button onClick={() => openPaymentModal(l)} className="px-3 py-1.5 text-xs bg-green-600 hover:bg-green-700 text-white">
+                             <Banknote size={14} /> Pay
+                          </Button>
+                          <div className="h-4 w-px bg-slate-200 mx-1"></div>
+                          <Button onClick={() => openChargeModal(l)} variant="secondary" className="px-3 py-1.5 text-xs">
+                             <Plus size={14} /> Charge
+                          </Button>
+                          <Button onClick={() => handleCloseStatement(l)} variant="outline" className="px-3 py-1.5 text-xs text-purple-700 border-purple-200 bg-purple-50 hover:bg-purple-100">
+                             <RefreshCw size={14} /> Close Stmt
+                          </Button>
+                          <button onClick={() => deleteItem('liabilities', l.id)} className="text-xs text-red-400 hover:text-red-600 flex items-center gap-1 px-2">
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                    </Card>
+                  );
+              })}</div>}
            </div>
            <div className="border rounded-xl overflow-hidden bg-white">
               <button onClick={() => setCollapsedSections(p => ({...p, installment: !p.installment}))} className="w-full p-4 bg-blue-50 flex justify-between font-bold text-blue-800">Installment Loans {collapsedSections.installment ? <ChevronDown/> : <ChevronUp/>}</button>
-              {!collapsedSections.installment && <div className="p-4 space-y-3">{liabilities.filter(l => l.type === 'installment').map(l => (
-                <Card key={l.id} className="p-4 border-l-4 border-l-blue-400">
-                    <div className="flex justify-between items-start mb-2">
-                      <div>
-                        <h4 className="font-bold text-slate-800 flex items-center gap-2">
-                          {l.name}
-                        </h4>
-                        <div className="flex gap-2 text-xs text-slate-500 mt-1">
-                          <span className="flex items-center gap-1"><AlertCircle size={10}/> Due Day: {l.dueDay || 'N/A'}</span>
+              {!collapsedSections.installment && <div className="p-4 space-y-3">{liabilities.filter(l => l.type === 'installment').map(l => {
+                  const { start, end } = currentBudgetCycle;
+                  let isPaid = false;
+                  if (l.lastPaymentDate) {
+                     const pd = new Date(l.lastPaymentDate);
+                     if (pd >= start && pd <= end) isPaid = true;
+                  }
+                  return (
+                    <Card key={l.id} className={`p-4 border-l-4 border-l-blue-400 ${isPaid ? 'bg-slate-50 border-l-green-400' : ''}`}>
+                        <div className="flex justify-between items-start mb-2">
+                          <div>
+                            <h4 className="font-bold text-slate-800 flex items-center gap-2">
+                              {l.name}
+                              {isPaid && <span className="bg-blue-100 text-blue-700 text-xs px-2 py-0.5 rounded-full flex items-center gap-1"><CheckCircle size={10} /> In Good Standing</span>}
+                            </h4>
+                            <div className="flex gap-2 text-xs text-slate-500 mt-1">
+                              <span className="flex items-center gap-1"><AlertCircle size={10}/> Due Day: {l.dueDay || 'N/A'}</span>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <div className="text-xl font-bold text-slate-800">${l.currentBal}</div>
+                            <div className="text-xs text-slate-500">Remaining Principal</div>
+                          </div>
                         </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-xl font-bold text-slate-800">${l.currentBal}</div>
-                        <div className="text-xs text-slate-500">Remaining Principal</div>
-                      </div>
-                    </div>
-                    <div className="flex justify-between items-center bg-slate-50 p-2 rounded text-xs">
-                      <span className="text-slate-600">Monthly Payment: <span className="font-bold text-red-600">${l.minPayment}</span></span>
-                    </div>
-                      <div className="mt-2 flex justify-end items-center gap-2 border-t border-slate-100 pt-2">
-                      <Button onClick={() => openPaymentModal(l)} className="px-3 py-1.5 text-xs bg-green-600 hover:bg-green-700 text-white">
-                         <Banknote size={14} /> Pay
-                      </Button>
-                      <button onClick={() => deleteItem('liabilities', l.id)} className="text-xs text-red-400 hover:text-red-600 flex items-center gap-1">
-                        <Trash2 size={12} /> Remove
-                      </button>
-                    </div>
-                </Card>
-              ))}</div>}
+                        <div className="flex justify-between items-center bg-slate-50 p-2 rounded text-xs">
+                          <span className="text-slate-600">Monthly Payment: <span className="font-bold text-red-600">${l.minPayment}</span></span>
+                        </div>
+                          <div className="mt-2 flex justify-end items-center gap-2 border-t border-slate-100 pt-2">
+                          <Button onClick={() => openPaymentModal(l)} className="px-3 py-1.5 text-xs bg-green-600 hover:bg-green-700 text-white">
+                             <Banknote size={14} /> Pay
+                          </Button>
+                          <button onClick={() => deleteItem('liabilities', l.id)} className="text-xs text-red-400 hover:text-red-600 flex items-center gap-1">
+                            <Trash2 size={12} /> Remove
+                          </button>
+                        </div>
+                    </Card>
+                  );
+              })}</div>}
            </div>
         </div>
       </div>
-      
-      {/* Charge Modal */}
       {chargeModalOpen && selectedLiability && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
            <Card className="w-full max-w-sm p-6 relative">
@@ -1164,6 +1225,18 @@ export default function SmartBudgetApp() {
                     >
                       <span className="text-sm">Full Balance</span>
                       <span className="font-bold">${selectedLiability.currentBal}</span>
+                    </button>
+                  </>
+                )}
+                
+                {selectedLiability.type === 'installment' && (
+                  <>
+                    <button 
+                      onClick={() => setPaymentConfig({ type: 'monthly', amount: selectedLiability.minPayment })}
+                      className={`w-full p-3 border rounded flex justify-between ${paymentConfig.type === 'monthly' ? 'border-green-500 bg-green-50' : ''}`}
+                    >
+                      <span className="text-sm">Monthly Payment</span>
+                      <span className="font-bold">${selectedLiability.minPayment}</span>
                     </button>
                   </>
                 )}
