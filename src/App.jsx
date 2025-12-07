@@ -82,7 +82,7 @@ const callGemini = async (prompt, imageBase64 = null) => {
 const apiKey = import.meta.env.VITE_GEMINI_KEY;
   
   // Keep this empty string for the preview to load without errors
-  // const apiKey = ""; 
+  //const apiKey = ""; 
   
   try {
     const parts = [{ text: prompt }];
@@ -327,7 +327,8 @@ export default function SmartBudgetApp() {
     if (!user) return;
     try {
       // 1. Update Auth Profile (Name)
-      await updateProfile(user, { displayName: displayName });
+      await updateProfile(user, { displayName: tempName });
+      setDisplayName(tempName);
       
       // 2. Update Firestore Profile (Phone, etc.)
       await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'profile_extra'), {
@@ -355,13 +356,9 @@ export default function SmartBudgetApp() {
   };
 
   const handleUpdateProfileName = async (e) => {
+     // Kept for compatibility if called directly, but handleSaveProfile is the main one now
     e.preventDefault();
-    if (!tempName.trim()) return;
-    try {
-      await updateProfile(user, { displayName: tempName });
-      setDisplayName(tempName);
-      setIsEditingProfile(false);
-    } catch (e) { console.error("Error saving profile", e); }
+    handleSaveProfile();
   };
 
   const handleSaveBudgetConfig = async () => {
@@ -886,21 +883,58 @@ export default function SmartBudgetApp() {
                  )}
               </div>
            </div>
+           
+           {/* Add Phone Number Field */}
            <div>
-              <label className="text-xs font-semibold text-slate-500 uppercase">Data Debugger</label>
-              <div className="p-3 bg-slate-50 rounded border border-slate-200 text-xs text-slate-600 space-y-1">
-                 <div className="flex items-center gap-2"><Database size={12} /> Cloud Items Found: <span className="font-bold">{debugStats.loaded}</span></div>
-                 <div className="flex items-center gap-2 text-green-600"><CheckCircle size={12} /> Matching Your ID: <span className="font-bold">{debugStats.matched}</span></div>
-                 <p className="pt-2 text-slate-400 italic">If 'Matched' is 0, check your Budget ID for typos/spaces.</p>
+              <label className="text-xs font-semibold text-slate-500 uppercase">Phone Number</label>
+              <div className="flex gap-2 mt-1">
+                 {isEditingProfile ? (
+                    <input className="flex-1 p-2 border rounded text-sm" value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} placeholder="+1 555-0199" />
+                 ) : (
+                    <div className="flex justify-between items-center p-2 bg-slate-50 rounded border text-sm font-medium text-slate-600 w-full">
+                       {phoneNumber || 'No Phone Set'}
+                       <Phone size={14} className="text-slate-400"/>
+                    </div>
+                 )}
               </div>
            </div>
-           <div>
-              <label className="text-xs font-semibold text-slate-500 uppercase">Device Sync</label>
-              <div className="flex items-center gap-2 mt-1 text-green-600"><Smartphone size={16} /><span className="text-sm font-medium">Portable</span></div>
-              <p className="text-xs text-slate-400 mt-1">Data is stored in public cloud securely tagged with your ID.</p>
+           
+           {isEditingProfile && (
+              <div className="pt-2">
+                 <Button onClick={handleSaveProfile} className="w-full text-xs">Save Changes</Button>
+              </div>
+           )}
+
+           <div className="pt-4 border-t border-slate-200">
+              <label className="text-xs font-semibold text-slate-500 uppercase">Security</label>
+              <div className="flex gap-2 mt-2">
+                 <input 
+                    type="password" 
+                    className="flex-1 p-2 border rounded text-sm" 
+                    placeholder="New Password" 
+                    value={newPassword}
+                    onChange={e => setNewPassword(e.target.value)}
+                 />
+                 <Button onClick={handleChangePassword} className="text-xs">Update</Button>
+              </div>
            </div>
+
+           <div className="pt-4 border-t border-slate-200">
+              <label className="text-xs font-semibold text-slate-500 uppercase">App Status</label>
+              <div className="grid grid-cols-2 gap-4 text-xs mt-2">
+                 <div>
+                    <span className="text-slate-500 block">Cloud Status</span>
+                    <span className="text-green-600 font-bold flex items-center gap-1"><Wifi size={12}/> Online</span>
+                 </div>
+                 <div>
+                    <span className="text-slate-500 block">Data Items</span>
+                    <span className="text-slate-700 font-bold">{debugStats.loaded} records</span>
+                 </div>
+              </div>
+           </div>
+           
            <div className="pt-4 border-t border-slate-100">
-             <Button onClick={handleLogout} variant="danger" className="w-full"><LogOut size={16} /> Logout / Switch Budget</Button>
+             <Button onClick={handleLogout} variant="danger" className="w-full"><LogOut size={16} /> Logout</Button>
            </div>
         </Card>
      </div>
