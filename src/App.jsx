@@ -80,7 +80,7 @@ const callGemini = async (prompt, imageBase64 = null) => {
    const apiKey = import.meta.env.VITE_GEMINI_KEY;
   
   // Keep this empty string for the preview to load without errors
-  //const apiKey = ""; 
+ // const apiKey = ""; 
   
   try {
     const parts = [{ text: prompt }];
