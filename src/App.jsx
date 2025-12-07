@@ -84,7 +84,7 @@ const callGemini = async (prompt, imageBase64 = null) => {
   const apiKey = import.meta.env.VITE_GEMINI_KEY;
   
   // Keep this empty string for the preview to load without errors
-  //const apiKey = ""; 
+  // const apiKey = ""; 
   
   try {
     const parts = [{ text: prompt }];
@@ -1097,7 +1097,7 @@ export default function SmartBudgetApp() {
            <div className="border rounded-xl overflow-hidden bg-white">
               <button onClick={() => setCollapsedSections(p => ({...p, revolving: !p.revolving}))} className="w-full p-4 bg-purple-50 flex justify-between font-bold text-purple-800">Revolving Credit {collapsedSections.revolving ? <ChevronDown/> : <ChevronUp/>}</button>
               {!collapsedSections.revolving && <div className="p-4 space-y-3">{liabilities.filter(l => l.type === 'revolving').map(l => {
-                  const { start, end } = currentBudgetCycle;
+                  const { start, end } = calculatedCycle;
                   let isPaid = false;
                   if (l.lastPaymentDate) {
                      const pd = new Date(l.lastPaymentDate);
@@ -1150,7 +1150,7 @@ export default function SmartBudgetApp() {
            <div className="border rounded-xl overflow-hidden bg-white">
               <button onClick={() => setCollapsedSections(p => ({...p, installment: !p.installment}))} className="w-full p-4 bg-blue-50 flex justify-between font-bold text-blue-800">Installment Loans {collapsedSections.installment ? <ChevronDown/> : <ChevronUp/>}</button>
               {!collapsedSections.installment && <div className="p-4 space-y-3">{liabilities.filter(l => l.type === 'installment').map(l => {
-                  const { start, end } = currentBudgetCycle;
+                  const { start, end } = calculatedCycle;
                   let isPaid = false;
                   if (l.lastPaymentDate) {
                      const pd = new Date(l.lastPaymentDate);
