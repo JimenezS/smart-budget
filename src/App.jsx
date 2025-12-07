@@ -43,7 +43,8 @@ import {
   Landmark,
   CalendarDays,
   Banknote,
-  Phone
+  Phone,
+  Wallet
 } from 'lucide-react';
 import { initializeApp } from "firebase/app";
 import { 
@@ -79,10 +80,10 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 // --- API Helper ---
 const callGemini = async (prompt, imageBase64 = null) => {
   // *** DEPLOYMENT STEP: UNCOMMENT THE LINE BELOW IN VS CODE ***
-const apiKey = import.meta.env.VITE_GEMINI_KEY;
+  const apiKey = import.meta.env.VITE_GEMINI_KEY;
   
   // Keep this empty string for the preview to load without errors
-  //const apiKey = ""; 
+ // const apiKey = ""; 
   
   try {
     const parts = [{ text: prompt }];
@@ -170,8 +171,6 @@ export default function SmartBudgetApp() {
   const [liabilities, setLiabilities] = useState([]);
   const [expenses, setExpenses] = useState([]); 
   const [historicalPaychecks, setHistoricalPaychecks] = useState([]);
-  
-  // Budget Config State
   const [budgetConfig, setBudgetConfig] = useState({ 
     startDate: new Date().toISOString().split('T')[0], 
     frequency: 'bi-weekly', 
@@ -230,11 +229,16 @@ export default function SmartBudgetApp() {
 
   // Modal State
   const [chargeModalOpen, setChargeModalOpen] = useState(false);
+  const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [selectedLiability, setSelectedLiability] = useState(null);
   const [newCharge, setNewCharge] = useState({ 
     amount: '', 
     date: new Date().toISOString().split('T')[0], 
     description: '' 
+  });
+  const [paymentConfig, setPaymentConfig] = useState({
+    type: 'custom', // 'statement', 'full', 'custom'
+    amount: ''
   });
 
   // --- Profile Data ---
@@ -678,6 +682,40 @@ export default function SmartBudgetApp() {
         updateItem('liabilities', l.id, { currentBal: newBal, statementBal: newBal }); 
   };
 
+  // --- Payment Modal Handlers ---
+  const openPaymentModal = (liability) => {
+    setSelectedLiability(liability);
+    setPaymentConfig({ type: 'statement', amount: '' });
+    setPaymentModalOpen(true);
+  };
+
+  const handleMakePayment = async () => {
+    if (!selectedLiability) return;
+    
+    let payAmount = 0;
+    if (paymentConfig.type === 'statement') payAmount = parseFloat(selectedLiability.statementBal || 0);
+    else if (paymentConfig.type === 'full') payAmount = parseFloat(selectedLiability.currentBal || 0);
+    else payAmount = parseFloat(paymentConfig.amount || 0);
+
+    if (payAmount <= 0) {
+      alert("Invalid payment amount");
+      return;
+    }
+
+    const newBal = Math.max(0, parseFloat(selectedLiability.currentBal) - payAmount);
+    
+    try {
+      await updateItem('liabilities', selectedLiability.id, { 
+        currentBal: newBal,
+        lastPaymentDate: new Date().toISOString()
+      });
+      alert(`Payment of $${payAmount.toFixed(2)} recorded!`);
+      setPaymentModalOpen(false);
+    } catch (e) {
+      console.error("Payment failed", e);
+    }
+  };
+
   // --- Helper Components ---
   const InfoIcon = ({size}) => <AlertCircle size={size} />;
 
@@ -1013,14 +1051,84 @@ export default function SmartBudgetApp() {
         <div className="lg:col-span-2 space-y-4">
            <div className="border rounded-xl overflow-hidden bg-white">
               <button onClick={() => setCollapsedSections(p => ({...p, revolving: !p.revolving}))} className="w-full p-4 bg-purple-50 flex justify-between font-bold text-purple-800">Revolving Credit {collapsedSections.revolving ? <ChevronDown/> : <ChevronUp/>}</button>
-              {!collapsedSections.revolving && <div className="p-4 space-y-3">{liabilities.filter(l => l.type === 'revolving').map(l => <div key={l.id} className="p-3 border rounded flex justify-between"><span>{l.name}</span><span>${l.currentBal}</span></div>)}</div>}
+              {!collapsedSections.revolving && <div className="p-4 space-y-3">{liabilities.filter(l => l.type === 'revolving').map(l => (
+                <Card key={l.id} className="p-4 border-l-4 border-l-purple-400">
+                    <div className="flex justify-between items-start mb-3">
+                      <div>
+                        <h4 className="font-bold text-slate-800 flex items-center gap-2">
+                          {l.name}
+                        </h4>
+                        <div className="flex gap-2 text-xs text-slate-500 mt-1">
+                          <span className="flex items-center gap-1"><Calendar size={10} /> Close Day: {l.closingDay || 'N/A'}</span>
+                          <span className="flex items-center gap-1"><AlertCircle size={10} /> Due Day: {l.dueDay || 'N/A'}</span>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-2xl font-bold text-slate-800">${l.currentBal}</div>
+                        <div className="text-xs text-slate-500">Current Balance</div>
+                      </div>
+                    </div>
+                    {/* ... grid of details ... */}
+                    <div className="grid grid-cols-3 gap-2 bg-white/50 p-3 rounded-lg text-xs">
+                      <div><p className="text-slate-500">Statement</p><p className="font-semibold">${l.statementBal}</p></div>
+                      <div><p className="text-slate-500">New Charges</p><p className="font-semibold text-orange-600">+${Math.max(0, l.currentBal - l.statementBal).toFixed(2)}</p></div>
+                      <div><p className="text-slate-500">Min Pay</p><p className="font-semibold text-red-600">${l.minPayment}</p></div>
+                    </div>
+                    
+                    <div className="mt-4 flex gap-2 justify-end items-center border-t border-slate-100 pt-3">
+                      <Button onClick={() => openPaymentModal(l)} className="px-3 py-1.5 text-xs bg-green-600 hover:bg-green-700 text-white">
+                         <Banknote size={14} /> Pay
+                      </Button>
+                      <div className="h-4 w-px bg-slate-200 mx-1"></div>
+                      <Button onClick={() => openChargeModal(l)} variant="secondary" className="px-3 py-1.5 text-xs">
+                         <Plus size={14} /> Charge
+                      </Button>
+                      <Button onClick={() => handleCloseStatement(l)} variant="outline" className="px-3 py-1.5 text-xs text-purple-700 border-purple-200 bg-purple-50 hover:bg-purple-100">
+                         <RefreshCw size={14} /> Close Stmt
+                      </Button>
+                      <button onClick={() => deleteItem('liabilities', l.id)} className="text-xs text-red-400 hover:text-red-600 flex items-center gap-1 px-2">
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                </Card>
+              ))}</div>}
            </div>
            <div className="border rounded-xl overflow-hidden bg-white">
               <button onClick={() => setCollapsedSections(p => ({...p, installment: !p.installment}))} className="w-full p-4 bg-blue-50 flex justify-between font-bold text-blue-800">Installment Loans {collapsedSections.installment ? <ChevronDown/> : <ChevronUp/>}</button>
-              {!collapsedSections.installment && <div className="p-4 space-y-3">{liabilities.filter(l => l.type === 'installment').map(l => <div key={l.id} className="p-3 border rounded flex justify-between"><span>{l.name}</span><span>${l.currentBal}</span></div>)}</div>}
+              {!collapsedSections.installment && <div className="p-4 space-y-3">{liabilities.filter(l => l.type === 'installment').map(l => (
+                <Card key={l.id} className="p-4 border-l-4 border-l-blue-400">
+                    <div className="flex justify-between items-start mb-2">
+                      <div>
+                        <h4 className="font-bold text-slate-800 flex items-center gap-2">
+                          {l.name}
+                        </h4>
+                        <div className="flex gap-2 text-xs text-slate-500 mt-1">
+                          <span className="flex items-center gap-1"><AlertCircle size={10}/> Due Day: {l.dueDay || 'N/A'}</span>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="text-xl font-bold text-slate-800">${l.currentBal}</div>
+                        <div className="text-xs text-slate-500">Remaining Principal</div>
+                      </div>
+                    </div>
+                    <div className="flex justify-between items-center bg-slate-50 p-2 rounded text-xs">
+                      <span className="text-slate-600">Monthly Payment: <span className="font-bold text-red-600">${l.minPayment}</span></span>
+                    </div>
+                      <div className="mt-2 flex justify-end items-center gap-2 border-t border-slate-100 pt-2">
+                      <Button onClick={() => openPaymentModal(l)} className="px-3 py-1.5 text-xs bg-green-600 hover:bg-green-700 text-white">
+                         <Banknote size={14} /> Pay
+                      </Button>
+                      <button onClick={() => deleteItem('liabilities', l.id)} className="text-xs text-red-400 hover:text-red-600 flex items-center gap-1">
+                        <Trash2 size={12} /> Remove
+                      </button>
+                    </div>
+                </Card>
+              ))}</div>}
            </div>
         </div>
       </div>
+      
+      {/* Charge Modal */}
       {chargeModalOpen && selectedLiability && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
            <Card className="w-full max-w-sm p-6 relative">
@@ -1028,6 +1136,61 @@ export default function SmartBudgetApp() {
               <h3 className="font-bold mb-4">Add Charge</h3>
               <input type="number" placeholder="Amount" value={newCharge.amount} onChange={e => setNewCharge({...newCharge, amount: e.target.value})} className="w-full p-2 border rounded mb-4"/>
               <Button onClick={handleConfirmCharge} className="w-full">Add</Button>
+           </Card>
+        </div>
+      )}
+
+      {/* Payment Modal */}
+      {paymentModalOpen && selectedLiability && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+           <Card className="w-full max-w-sm p-6 relative">
+              <button onClick={() => setPaymentModalOpen(false)} className="absolute top-4 right-4"><X/></button>
+              <h3 className="font-bold mb-4 text-green-700 flex items-center gap-2"><Banknote/> Make Payment</h3>
+              <p className="text-sm text-slate-500 mb-4">Paying: <b>{selectedLiability.name}</b></p>
+              
+              <div className="space-y-3">
+                {selectedLiability.type === 'revolving' && (
+                  <>
+                    <button 
+                      onClick={() => setPaymentConfig({ type: 'statement', amount: selectedLiability.statementBal })}
+                      className={`w-full p-3 border rounded flex justify-between ${paymentConfig.type === 'statement' ? 'border-green-500 bg-green-50' : ''}`}
+                    >
+                      <span className="text-sm">Statement Balance</span>
+                      <span className="font-bold">${selectedLiability.statementBal}</span>
+                    </button>
+                    <button 
+                      onClick={() => setPaymentConfig({ type: 'full', amount: selectedLiability.currentBal })}
+                      className={`w-full p-3 border rounded flex justify-between ${paymentConfig.type === 'full' ? 'border-green-500 bg-green-50' : ''}`}
+                    >
+                      <span className="text-sm">Full Balance</span>
+                      <span className="font-bold">${selectedLiability.currentBal}</span>
+                    </button>
+                  </>
+                )}
+                
+                <div className={`w-full p-3 border rounded ${paymentConfig.type === 'custom' ? 'border-green-500 bg-green-50' : ''}`}>
+                   <div className="flex items-center gap-2 mb-1">
+                     <input 
+                       type="radio" 
+                       checked={paymentConfig.type === 'custom'} 
+                       onChange={() => setPaymentConfig({ ...paymentConfig, type: 'custom' })}
+                     />
+                     <span className="text-sm">Custom Amount</span>
+                   </div>
+                   <input 
+                     type="number" 
+                     className="w-full p-2 border rounded" 
+                     placeholder="0.00" 
+                     value={paymentConfig.amount} 
+                     onChange={(e) => setPaymentConfig({ type: 'custom', amount: e.target.value })}
+                     onClick={() => setPaymentConfig({ ...paymentConfig, type: 'custom' })}
+                   />
+                </div>
+                
+                <Button onClick={handleMakePayment} className="w-full bg-green-600 hover:bg-green-700 text-white mt-4">
+                  Confirm Payment
+                </Button>
+              </div>
            </Card>
         </div>
       )}
