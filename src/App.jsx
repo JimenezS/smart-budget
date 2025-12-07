@@ -77,10 +77,10 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
 // --- API Helper ---
 const callGemini = async (prompt, imageBase64 = null) => {
   // *** DEPLOYMENT STEP: UNCOMMENT THE LINE BELOW IN VS CODE ***
-   const apiKey = import.meta.env.VITE_GEMINI_KEY;
+  const apiKey = import.meta.env.VITE_GEMINI_KEY;
   
   // Keep this empty string for the preview to load without errors
- // const apiKey = ""; 
+  //const apiKey = ""; 
   
   try {
     const parts = [{ text: prompt }];
@@ -966,7 +966,7 @@ export default function SmartBudgetApp() {
             <h1 className="font-bold text-xl hidden sm:block">SmartBudget</h1>
           </div>
           <nav className="flex gap-1 bg-slate-100 p-1 rounded-lg overflow-x-auto">
-            {['dashboard', 'income', 'bills', 'liabilities', 'parser', 'profile'].map((tab) => (
+            {['dashboard', 'income', 'bills', 'expenses', 'liabilities', 'profile'].map((tab) => (
               <button key={tab} onClick={() => setActiveTab(tab)} className={`px-3 py-1.5 text-sm font-medium rounded-md capitalize whitespace-nowrap transition-all flex items-center gap-2 ${activeTab === tab ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>
                 {tab === 'profile' && <User size={14} />} {tab === 'bills' ? 'Add Bills' : tab}
               </button>
@@ -982,6 +982,29 @@ export default function SmartBudgetApp() {
         {activeTab === 'expenses' && renderExpenses()}
         {activeTab === 'profile' && renderProfile()}
       </main>
+
+      {/* --- BOTTOM MOBILE NAVIGATION (Restored!) --- */}
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t px-4 py-2 z-50 md:hidden">
+        <div className="max-w-md mx-auto flex justify-between items-center">
+          {[
+            { id: 'dashboard', icon: <TrendingUp size={20} />, label: 'Dash' },
+            { id: 'bills', icon: <Receipt size={20} />, label: 'Bills' },
+            { id: 'expenses', icon: <DollarSign size={20} />, label: 'Spend' },
+            { id: 'income', icon: <Landmark size={20} />, label: 'Income' },
+            { id: 'liabilities', icon: <CreditCard size={20} />, label: 'Debt' },
+            { id: 'profile', icon: <User size={20} />, label: 'Profile' }
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-all ${activeTab === tab.id ? 'text-blue-600 bg-blue-50' : 'text-slate-400 hover:text-slate-600'}`}
+            >
+              {tab.icon}
+              <span className="text-[10px] font-medium">{tab.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
