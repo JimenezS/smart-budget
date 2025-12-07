@@ -42,7 +42,8 @@ import {
   Image as ImageIcon,
   Landmark,
   CalendarDays,
-  Banknote
+  Banknote,
+  Phone
 } from 'lucide-react';
 import { initializeApp } from "firebase/app";
 import { 
@@ -52,6 +53,7 @@ import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   updateProfile,
+  updatePassword,
   signOut,
   onAuthStateChanged
 } from "firebase/auth";
@@ -80,7 +82,7 @@ const callGemini = async (prompt, imageBase64 = null) => {
  const apiKey = import.meta.env.VITE_GEMINI_KEY;
   
   // Keep this empty string for the preview to load without errors
-  // const apiKey = ""; 
+  //const apiKey = ""; 
   
   try {
     const parts = [{ text: prompt }];
@@ -237,8 +239,9 @@ export default function SmartBudgetApp() {
 
   // --- Profile Data ---
   const [displayName, setDisplayName] = useState('');
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [newPassword, setNewPassword] = useState('');
   const [isEditingProfile, setIsEditingProfile] = useState(false);
-  const [tempName, setTempName] = useState('');
   const [debugStats, setDebugStats] = useState({ loaded: 0, matched: 0 });
 
   // --- Auth & Sync ---
@@ -278,6 +281,17 @@ export default function SmartBudgetApp() {
         if (doc.exists()) setBudgetConfig(doc.data()); 
     });
 
+    // Fetch Extra Profile Data (Phone, etc.)
+    const profileRef = doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'profile_extra');
+    onSnapshot(profileRef, (doc) => {
+        if(doc.exists()) {
+            const data = doc.data();
+            setPhoneNumber(data.phoneNumber || '');
+        }
+    });
+
+    if (user.displayName) setDisplayName(user.displayName);
+
     return () => { 
         unsubIncomes(); 
         unsubBills(); 
@@ -308,14 +322,35 @@ export default function SmartBudgetApp() {
     setIncomes([]); setBills([]); setLiabilities([]); setExpenses([]);
   };
 
-  const handleUpdateProfileName = async (e) => {
-    e.preventDefault();
-    if (!tempName.trim()) return;
+  const handleSaveProfile = async () => {
+    if (!user) return;
     try {
-      await updateProfile(user, { displayName: tempName });
-      setDisplayName(tempName);
+      // 1. Update Auth Profile (Name)
+      await updateProfile(user, { displayName: displayName });
+      
+      // 2. Update Firestore Profile (Phone, etc.)
+      await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'settings', 'profile_extra'), {
+        phoneNumber: phoneNumber,
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+
       setIsEditingProfile(false);
-    } catch (e) { console.error("Error saving profile", e); }
+      alert("Profile updated successfully!");
+    } catch (e) { 
+        console.error("Error saving profile", e); 
+        alert("Error saving profile. Try again.");
+    }
+  };
+
+  const handleChangePassword = async () => {
+      if (!newPassword) return;
+      try {
+          await updatePassword(user, newPassword);
+          setNewPassword('');
+          alert("Password updated successfully!");
+      } catch (e) {
+          alert("Error: " + e.message + "\n(You may need to re-login to change password)");
+      }
   };
 
   const handleSaveBudgetConfig = async () => {
@@ -820,41 +855,83 @@ export default function SmartBudgetApp() {
               <User size={40} />
            </div>
            <h2 className="text-2xl font-bold text-slate-800">User Profile</h2>
-           <p className="text-slate-500 mt-2">Managing Budget: <span className="font-mono bg-slate-100 px-2 py-1 rounded text-slate-800">{budgetId}</span></p>
+           <p className="text-slate-500 mt-2">{user?.email || 'Authenticated User'}</p>
         </div>
+
+        {/* 1. Personal Details Card */}
         <Card className="p-6 space-y-4">
+           <h3 className="font-bold text-slate-800 flex items-center gap-2"><User size={18}/> Personal Details</h3>
+           
            <div>
               <label className="text-xs font-semibold text-slate-500 uppercase">Display Name</label>
-              <div className="flex gap-2">
-                 {isEditingProfile ? (
-                    <form onSubmit={handleUpdateProfileName} className="flex-1 flex gap-2">
-                      <input className="flex-1 p-2 border rounded text-sm" value={tempName} onChange={e => setTempName(e.target.value)} placeholder="Your Name" />
-                      <Button type="submit" className="text-xs">Save</Button>
-                      <Button variant="ghost" onClick={() => setIsEditingProfile(false)} className="text-xs">Cancel</Button>
-                    </form>
-                 ) : (
-                    <div className="flex-1 p-3 bg-slate-50 rounded border border-slate-200 text-sm font-medium text-slate-800 flex justify-between items-center">
-                      {displayName || 'Budget Owner'}
-                      <button onClick={() => { setTempName(displayName || ''); setIsEditingProfile(true); }} className="text-slate-400 hover:text-blue-600"><Edit2 size={14} /></button>
-                    </div>
-                 )}
+              {isEditingProfile ? (
+                 <div className="flex gap-2">
+                    <input className="flex-1 p-2 border rounded text-sm" value={tempName} onChange={e => setTempName(e.target.value)} placeholder="Full Name" />
+                 </div>
+              ) : (
+                 <div className="flex justify-between items-center p-2 bg-slate-50 rounded border text-sm font-medium">
+                    {displayName || 'No Name Set'}
+                    <button onClick={() => { setTempName(displayName || ''); setIsEditingProfile(true); }} className="text-blue-600"><Edit2 size={14}/></button>
+                 </div>
+              )}
+           </div>
+
+           <div>
+              <label className="text-xs font-semibold text-slate-500 uppercase">Phone Number</label>
+              {isEditingProfile ? (
+                 <div className="flex gap-2 mt-1">
+                    <input className="flex-1 p-2 border rounded text-sm" value={phoneNumber} onChange={e => setPhoneNumber(e.target.value)} placeholder="+1 555-0199" />
+                 </div>
+              ) : (
+                 <div className="flex justify-between items-center p-2 bg-slate-50 rounded border text-sm font-medium text-slate-600">
+                    {phoneNumber || 'No Phone Set'}
+                    <Phone size={14} className="text-slate-400"/>
+                 </div>
+              )}
+           </div>
+
+           {isEditingProfile && (
+              <div className="flex gap-2 pt-2">
+                 <Button onClick={handleSaveProfile} className="flex-1 text-xs">Save Changes</Button>
+                 <Button onClick={() => setIsEditingProfile(false)} variant="secondary" className="flex-1 text-xs">Cancel</Button>
+              </div>
+           )}
+        </Card>
+
+        {/* 2. Security Card */}
+        <Card className="p-6 space-y-4">
+           <h3 className="font-bold text-slate-800 flex items-center gap-2"><Lock size={18}/> Security</h3>
+           <div>
+              <label className="text-xs font-semibold text-slate-500 uppercase">Change Password</label>
+              <div className="flex gap-2 mt-1">
+                 <input 
+                    type="password" 
+                    className="flex-1 p-2 border rounded text-sm" 
+                    placeholder="New Password" 
+                    value={newPassword}
+                    onChange={e => setNewPassword(e.target.value)}
+                 />
+                 <Button onClick={handleChangePassword} className="text-xs">Update</Button>
               </div>
            </div>
-           <div>
-              <label className="text-xs font-semibold text-slate-500 uppercase">Data Debugger</label>
-              <div className="p-3 bg-slate-50 rounded border border-slate-200 text-xs text-slate-600 space-y-1">
-                 <div className="flex items-center gap-2"><Database size={12} /> Cloud Items Found: <span className="font-bold">{debugStats.loaded}</span></div>
-                 <div className="flex items-center gap-2 text-green-600"><CheckCircle size={12} /> Matching Your ID: <span className="font-bold">{debugStats.matched}</span></div>
-                 <p className="pt-2 text-slate-400 italic">If 'Matched' is 0, check your Budget ID for typos/spaces.</p>
+        </Card>
+
+        {/* 3. App Status Card */}
+        <Card className="p-6 space-y-4 bg-slate-50">
+           <h3 className="font-bold text-slate-800 flex items-center gap-2"><Settings size={18}/> App Status</h3>
+           <div className="grid grid-cols-2 gap-4 text-xs">
+              <div>
+                 <span className="text-slate-500 block">Cloud Status</span>
+                 <span className="text-green-600 font-bold flex items-center gap-1"><Wifi size={12}/> Online</span>
+              </div>
+              <div>
+                 <span className="text-slate-500 block">Data Items</span>
+                 <span className="text-slate-700 font-bold">{debugStats.loaded} records</span>
               </div>
            </div>
-           <div>
-              <label className="text-xs font-semibold text-slate-500 uppercase">Device Sync</label>
-              <div className="flex items-center gap-2 mt-1 text-green-600"><Smartphone size={16} /><span className="text-sm font-medium">Portable</span></div>
-              <p className="text-xs text-slate-400 mt-1">Data is stored in public cloud securely tagged with your ID.</p>
-           </div>
-           <div className="pt-4 border-t border-slate-100">
-             <Button onClick={handleLogout} variant="danger" className="w-full"><LogOut size={16} /> Logout / Switch Budget</Button>
+           
+           <div className="pt-4 border-t border-slate-200">
+             <Button onClick={handleLogout} variant="danger" className="w-full"><LogOut size={16} /> Logout</Button>
            </div>
         </Card>
      </div>
@@ -982,29 +1059,6 @@ export default function SmartBudgetApp() {
         {activeTab === 'expenses' && renderExpenses()}
         {activeTab === 'profile' && renderProfile()}
       </main>
-
-      {/* --- BOTTOM MOBILE NAVIGATION (Restored!) --- */}
-      <div className="fixed bottom-0 left-0 right-0 bg-white border-t px-4 py-2 z-50 md:hidden">
-        <div className="max-w-md mx-auto flex justify-between items-center">
-          {[
-            { id: 'dashboard', icon: <TrendingUp size={20} />, label: 'Dash' },
-            { id: 'bills', icon: <Receipt size={20} />, label: 'Bills' },
-            { id: 'expenses', icon: <DollarSign size={20} />, label: 'Spend' },
-            { id: 'income', icon: <Landmark size={20} />, label: 'Income' },
-            { id: 'liabilities', icon: <CreditCard size={20} />, label: 'Debt' },
-            { id: 'profile', icon: <User size={20} />, label: 'Profile' }
-          ].map(tab => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-all ${activeTab === tab.id ? 'text-blue-600 bg-blue-50' : 'text-slate-400 hover:text-slate-600'}`}
-            >
-              {tab.icon}
-              <span className="text-[10px] font-medium">{tab.label}</span>
-            </button>
-          ))}
-        </div>
-      </div>
     </div>
   );
 }
